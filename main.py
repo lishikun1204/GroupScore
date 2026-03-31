@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import colorchooser, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 
 def get_app_dir() -> str:
@@ -487,6 +487,8 @@ class GroupScoreApp:
                     {"name": "第二小组", "score": 0.0, "color": GROUP_COLOR_PALETTE[1]["hex"], "members": []},
                     {"name": "第三小组", "score": 0.0, "color": GROUP_COLOR_PALETTE[2]["hex"], "members": []},
                     {"name": "第四小组", "score": 0.0, "color": GROUP_COLOR_PALETTE[3]["hex"], "members": []},
+                    {"name": "第五小组", "score": 0.0, "color": GROUP_COLOR_PALETTE[4]["hex"], "members": []},
+                    {"name": "第六小组", "score": 0.0, "color": GROUP_COLOR_PALETTE[5]["hex"], "members": []},
                 ],
                 "history": [],
             }
@@ -496,6 +498,17 @@ class GroupScoreApp:
             self.data["groups"] = []
         if "history" not in self.data or not isinstance(self.data["history"], list):
             self.data["history"] = []
+        if len(self.data.get("groups", [])) < 6:
+            cn = ["一", "二", "三", "四", "五", "六"]
+            added = False
+            while len(self.data["groups"]) < 6:
+                idx = len(self.data["groups"])
+                self.data["groups"].append(
+                    {"name": f"第{cn[idx]}小组", "score": 0.0, "color": GROUP_COLOR_PALETTE[idx]["hex"], "members": []}
+                )
+                added = True
+            if added:
+                self.save_data()
         used_hex: set[str] = set()
         used_badges: set[str] = set()
         for group in self.data.get("groups", []):
@@ -845,31 +858,14 @@ class GroupScoreApp:
         tk.Button(btn_frame, text="-0.5", bg=self.theme.accent_purple, fg="white",
                   command=lambda g=group_idx: self.change_score(g, -0.5), **btn_style).grid(row=0, column=3, padx=4, pady=2)
 
-        input_frame = tk.Frame(content_frame, bg=self.theme.bg_secondary)
-        input_frame.pack(pady=8, fill=tk.X)
-        custom_entry = tk.Entry(input_frame, font=self.font_body, bg=self.theme.bg_surface, fg=self.theme.text_primary,
-                                bd=1, relief=tk.SOLID, highlightbackground=self.theme.border, highlightthickness=1)
-        custom_entry.pack(side=tk.LEFT, padx=(0, 6), fill=tk.X, expand=True)
-
-        apply_btn = tk.Button(input_frame, text="设置分数" if self.locale == "zh_CN" else "Set",
-                              bg=border_color, fg=title_fg, font=self.font_body, bd=0, padx=14, pady=6,
-                              command=lambda g=group_idx, e=custom_entry: self.apply_custom_score(g, e))
-        apply_btn.pack(side=tk.LEFT)
-
-        manage_text = "👥 管理小组成员" if self.config.enable_emoji else ("管理小组成员" if self.locale == "zh_CN" else "Members")
-        tk.Button(content_frame, text=manage_text, bg=self.theme.accent_neutral, fg="white", font=self.font_body,
-                  bd=0, pady=8, command=lambda g=group_idx: self.open_member_manager(g)).pack(pady=(10, 0), fill=tk.X)
-
         self.group_cards.append(
             {
                 "group_idx": group_idx,
                 "card": card,
                 "score_var": score_var,
-                "custom_entry": custom_entry,
                 "title_frame": title_frame,
                 "title_label": title_label,
                 "score_label": score_label,
-                "apply_btn": apply_btn,
                 "swatch": swatch,
                 "last_color": border_color,
                 "anim_after_id": None,
@@ -896,10 +892,6 @@ class GroupScoreApp:
             pass
         try:
             card_info["title_label"].configure(bg=color, fg=fg, text=f"{badge}  {name}")
-        except Exception:
-            pass
-        try:
-            card_info["apply_btn"].configure(bg=color, fg=fg)
         except Exception:
             pass
         try:
@@ -941,8 +933,7 @@ class GroupScoreApp:
         tick(0)
 
     def _update_cards_columns(self) -> None:
-        width = self.left_container.winfo_width()
-        columns = 2 if (self._layout_mode == "side" and width >= 720) else 1
+        columns = 2
         if columns == self._cards_columns:
             return
         self._cards_columns = columns
@@ -959,7 +950,10 @@ class GroupScoreApp:
             col = i % cols
             card_info["card"].grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
         for c in range(cols):
-            self.cards_frame.grid_columnconfigure(c, weight=1)
+            self.cards_frame.grid_columnconfigure(c, weight=1, uniform="cards")
+        rows = max(1, (len(self.group_cards) + cols - 1) // cols)
+        for r in range(rows):
+            self.cards_frame.grid_rowconfigure(r, weight=1, uniform="cards")
 
     def change_score(self, group_idx: int, delta: float) -> None:
         self.data["groups"][group_idx]["score"] = float(self.data["groups"][group_idx].get("score", 0.0)) + float(delta)
@@ -998,6 +992,10 @@ class GroupScoreApp:
         group_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label=self.t("menu_group"), menu=group_menu)
         group_menu.add_command(label=self.t("menu_manage_groups"), command=self.open_group_manager)
+        group_menu.add_command(
+            label=("成员管理" if self.locale == "zh_CN" else "Members"),
+            command=self.open_members_manager_global,
+        )
         group_menu.add_separator()
         group_menu.add_command(label=self.t("menu_add_group"), command=lambda: self.add_new_group(None))
 
@@ -1107,6 +1105,13 @@ class GroupScoreApp:
                   command=on_delete, bg=self.theme.accent_red, **btn_style).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="👥 成员" if self.config.enable_emoji else ("成员" if self.locale == "zh_CN" else "Members"),
                   command=on_members, bg=self.theme.accent_green, **btn_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(
+            btn_frame,
+            text=("👥 全部成员" if self.config.enable_emoji else ("全部成员" if self.locale == "zh_CN" else "All Members")),
+            command=self.open_members_manager_global,
+            bg=self.theme.accent_purple,
+            **btn_style,
+        ).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="🎨 颜色检查" if self.config.enable_emoji else ("颜色检查" if self.locale == "zh_CN" else "Colors"),
                   command=self.open_color_check, bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="➕ 添加" if self.config.enable_emoji else ("添加" if self.locale == "zh_CN" else "Add"),
@@ -1115,6 +1120,451 @@ class GroupScoreApp:
         )
         tk.Button(btn_frame, text="关闭" if self.locale == "zh_CN" else "Close", command=manager_win.destroy,
                   bg=self.theme.accent_neutral, **btn_style).pack(side=tk.RIGHT, padx=5)
+
+    def open_members_manager_global(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title("成员管理" if self.locale == "zh_CN" else "Members")
+        win.geometry("860x520")
+        win.configure(bg=self.theme.bg_primary)
+        win.transient(self.root)
+        win.grab_set()
+
+        main_frame = tk.Frame(win, bg=self.theme.bg_primary, padx=10, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        list_frame = tk.LabelFrame(
+            main_frame,
+            text="成员列表" if self.locale == "zh_CN" else "Member List",
+            font=self.font_title,
+            bg=self.theme.bg_primary,
+            fg=self.theme.text_primary,
+        )
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ("name", "role", "group")
+        tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=14)
+        tree.heading("name", text="姓名" if self.locale == "zh_CN" else "Name")
+        tree.heading("role", text="角色" if self.locale == "zh_CN" else "Role")
+        tree.heading("group", text="所属组" if self.locale == "zh_CN" else "Group")
+        tree.column("name", width=240)
+        tree.column("role", width=120, anchor=tk.CENTER)
+        tree.column("group", width=260)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def group_names() -> list[str]:
+            return [str(g.get("name", "")).strip() for g in self.data.get("groups", []) if str(g.get("name", "")).strip()]
+
+        def parse_selected_ref() -> Optional[tuple[int, int]]:
+            sel = tree.selection()
+            if not sel:
+                return None
+            try:
+                gi_s, mi_s = str(sel[0]).split(":", 1)
+                return int(gi_s), int(mi_s)
+            except Exception:
+                return None
+
+        def reload_tree() -> None:
+            for item in tree.get_children():
+                tree.delete(item)
+            for gi, g in enumerate(self.data.get("groups", [])):
+                gname = str(g.get("name", "")).strip()
+                members = g.get("members", [])
+                if not isinstance(members, list):
+                    continue
+                for mi, m in enumerate(members):
+                    tree.insert(
+                        "",
+                        tk.END,
+                        iid=f"{gi}:{mi}",
+                        values=(str(m.get("name", "")).strip(), str(m.get("role", "组员")).strip(), gname),
+                    )
+
+        def ensure_excel_ready() -> Any:
+            try:
+                import openpyxl  # type: ignore
+
+                return openpyxl
+            except Exception:
+                messagebox.showerror(
+                    self.t("err"),
+                    "缺少 openpyxl，无法导入/导出 Excel。\n"
+                    "开发环境请安装：pip install openpyxl\n"
+                    "如已打包为 exe，请在打包环境安装 openpyxl 后重新打包。"
+                    if self.locale == "zh_CN"
+                    else "Missing openpyxl. Install: pip install openpyxl. Rebuild exe after installing.",
+                    parent=win,
+                )
+                return None
+
+        def export_excel() -> None:
+            openpyxl = ensure_excel_ready()
+            if openpyxl is None:
+                return
+            path = filedialog.asksaveasfilename(
+                parent=win,
+                title="导出 Excel" if self.locale == "zh_CN" else "Export Excel",
+                defaultextension=".xlsx",
+                filetypes=[("Excel", "*.xlsx")],
+            )
+            if not path:
+                return
+
+            wb = openpyxl.Workbook()
+            ws_groups = wb.active
+            ws_groups.title = "Groups"
+            ws_groups.append(["name", "score", "color", "badge", "pattern"])
+            for g in self.data.get("groups", []):
+                ws_groups.append(
+                    [
+                        str(g.get("name", "")).strip(),
+                        float(g.get("score", 0.0)),
+                        str(_extract_hex(g.get("color", "")) or "").lower(),
+                        str(g.get("badge", "")).strip(),
+                        str(g.get("pattern", "")).strip(),
+                    ]
+                )
+
+            ws_members = wb.create_sheet("Members")
+            ws_members.append(["group", "name", "role"])
+            for g in self.data.get("groups", []):
+                gname = str(g.get("name", "")).strip()
+                members = g.get("members", [])
+                if not isinstance(members, list):
+                    continue
+                for m in members:
+                    ws_members.append([gname, str(m.get("name", "")).strip(), str(m.get("role", "组员")).strip()])
+
+            try:
+                wb.save(path)
+            except Exception as e:
+                messagebox.showerror(self.t("err"), str(e))
+                return
+            messagebox.showinfo(self.t("info"), "导出完成。" if self.locale == "zh_CN" else "Exported.")
+
+        def import_excel() -> None:
+            openpyxl = ensure_excel_ready()
+            if openpyxl is None:
+                return
+            path = filedialog.askopenfilename(
+                parent=win,
+                title="导入 Excel" if self.locale == "zh_CN" else "Import Excel",
+                filetypes=[("Excel", "*.xlsx")],
+            )
+            if not path:
+                return
+            clear_first = messagebox.askyesno(
+                self.t("info"),
+                "导入前是否清空现有小组与成员？" if self.locale == "zh_CN" else "Clear existing groups/members before import?",
+                parent=win,
+            )
+            try:
+                wb = openpyxl.load_workbook(path, data_only=True)
+            except Exception as e:
+                messagebox.showerror(self.t("err"), str(e))
+                return
+
+            sheet_map = {str(name).strip().lower(): name for name in wb.sheetnames}
+            groups_sheet_name = sheet_map.get("groups")
+            members_sheet_name = sheet_map.get("members")
+            if not groups_sheet_name and not members_sheet_name:
+                messagebox.showerror(
+                    self.t("err"),
+                    "未找到工作表：Groups / Members" if self.locale == "zh_CN" else "Missing sheets: Groups / Members",
+                )
+                return
+
+            if clear_first:
+                self.data["groups"] = []
+
+            def get_or_create_group(name: str) -> dict[str, Any]:
+                for g in self.data.get("groups", []):
+                    if str(g.get("name", "")).strip() == name:
+                        if "members" not in g or not isinstance(g.get("members"), list):
+                            g["members"] = []
+                        return g
+                used_hex = {c.lower() for gg in self.data.get("groups", []) for c in [(_extract_hex(gg.get("color", "")) or "")] if c}
+                preferred = _next_palette_entry(used_hex)
+                group = {
+                    "name": name,
+                    "score": 0.0,
+                    "color": str(preferred["hex"]).lower(),
+                    "badge": str(preferred["badge"]),
+                    "pattern": str(preferred["pattern"]),
+                    "members": [],
+                }
+                self.data["groups"].append(group)
+                return group
+
+            if groups_sheet_name:
+                ws = wb[groups_sheet_name]
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if not row:
+                        continue
+                    name = str(row[0]).strip() if row[0] is not None else ""
+                    if not name:
+                        continue
+                    g = get_or_create_group(name)
+                    if len(row) > 1 and row[1] is not None and str(row[1]).strip() != "":
+                        try:
+                            g["score"] = float(row[1])
+                        except Exception:
+                            pass
+                    if len(row) > 2 and row[2] is not None and str(row[2]).strip():
+                        g["color"] = str(row[2]).strip().lower()
+                    if len(row) > 3 and row[3] is not None and str(row[3]).strip():
+                        g["badge"] = str(row[3]).strip()
+                    if len(row) > 4 and row[4] is not None and str(row[4]).strip():
+                        g["pattern"] = str(row[4]).strip()
+
+            if members_sheet_name:
+                ws = wb[members_sheet_name]
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if not row:
+                        continue
+                    gname = str(row[0]).strip() if row[0] is not None else ""
+                    mname = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+                    role = str(row[2]).strip() if len(row) > 2 and row[2] is not None else "组员"
+                    if not gname or not mname:
+                        continue
+                    g = get_or_create_group(gname)
+                    members = g.setdefault("members", [])
+                    existing = next((m for m in members if str(m.get("name", "")).strip() == mname), None)
+                    if existing is None:
+                        members.append({"name": mname, "role": role or "组员"})
+                    else:
+                        existing["role"] = role or str(existing.get("role", "组员"))
+
+            self._scores_dirty = True
+            self._ranking_dirty = True
+            self._history_dirty = True
+            self._mark_dirty()
+            self._rebuild_cards()
+            self.refresh_all()
+            reload_tree()
+            messagebox.showinfo(self.t("info"), "导入完成。" if self.locale == "zh_CN" else "Imported.")
+
+        reload_tree()
+
+        btn_frame = tk.Frame(main_frame, bg=self.theme.bg_primary)
+        btn_frame.pack(fill=tk.X, pady=12)
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8, "fg": "white"}
+
+        def on_add() -> None:
+            dialog = tk.Toplevel(win)
+            dialog.title("添加成员" if self.locale == "zh_CN" else "Add Member")
+            dialog.geometry("520x280")
+            dialog.configure(bg=self.theme.bg_primary)
+            dialog.transient(win)
+            dialog.grab_set()
+
+            title_frame = tk.Frame(dialog, bg=self.theme.accent_blue, height=52)
+            title_frame.pack(fill=tk.X)
+            title_frame.pack_propagate(False)
+            tk.Label(
+                title_frame,
+                text="➕ 添加新成员" if self.locale == "zh_CN" else "Add Member",
+                font=self.font_header,
+                bg=self.theme.accent_blue,
+                fg="white",
+                pady=12,
+            ).pack(fill=tk.X)
+
+            frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=24, pady=18)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(frame, text="姓名：" if self.locale == "zh_CN" else "Name:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=0, column=0, sticky="w", pady=10)
+            name_entry = tk.Entry(frame, width=30, font=self.font_body, bg=self.theme.bg_secondary, fg=self.theme.text_primary, bd=1, relief=tk.SOLID, highlightbackground=self.theme.border, highlightthickness=1)
+            name_entry.grid(row=0, column=1, sticky="ew", pady=10, padx=10)
+
+            tk.Label(frame, text="角色：" if self.locale == "zh_CN" else "Role:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=1, column=0, sticky="w", pady=10)
+            role_var = tk.StringVar(value="组员")
+            role_combo = ttk.Combobox(frame, textvariable=role_var, values=["组长", "组员"], state="readonly", width=27)
+            role_combo.grid(row=1, column=1, sticky="ew", pady=10, padx=10)
+
+            tk.Label(frame, text="所属组：" if self.locale == "zh_CN" else "Group:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=2, column=0, sticky="w", pady=10)
+            gvar = tk.StringVar(value=(group_names()[0] if group_names() else ""))
+            gcombo = ttk.Combobox(frame, textvariable=gvar, values=group_names(), state="readonly", width=27)
+            gcombo.grid(row=2, column=1, sticky="ew", pady=10, padx=10)
+
+            def on_save() -> None:
+                name = name_entry.get().strip()
+                gname = gvar.get().strip()
+                if not name:
+                    messagebox.showerror(self.t("err"), "请输入姓名！" if self.locale == "zh_CN" else "Enter a name.", parent=dialog)
+                    return
+                if not gname:
+                    messagebox.showerror(self.t("err"), "请选择所属组！" if self.locale == "zh_CN" else "Select a group.", parent=dialog)
+                    return
+                idx = None
+                for i, g in enumerate(self.data.get("groups", [])):
+                    if str(g.get("name", "")).strip() == gname:
+                        idx = i
+                        break
+                if idx is None:
+                    messagebox.showerror(self.t("err"), "所属组不存在。" if self.locale == "zh_CN" else "Group not found.", parent=dialog)
+                    return
+                group = self.data["groups"][idx]
+                if "members" not in group or not isinstance(group.get("members"), list):
+                    group["members"] = []
+                if any(str(m.get("name", "")).strip() == name for m in group["members"]):
+                    messagebox.showerror(self.t("err"), "该小组已存在同名成员！" if self.locale == "zh_CN" else "Duplicate member.", parent=dialog)
+                    return
+                group["members"].append({"name": name, "role": role_var.get()})
+                self.add_history(gname, f"新增成员【{name}】")
+                self._mark_dirty()
+                self.refresh_all()
+                reload_tree()
+                dialog.destroy()
+
+            bottom = tk.Frame(frame, bg=self.theme.bg_primary)
+            bottom.grid(row=3, column=0, columnspan=2, pady=18)
+            bstyle = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
+            tk.Button(bottom, text="添加" if self.locale == "zh_CN" else "Add", command=on_save, bg=self.theme.accent_green, **bstyle).pack(side=tk.LEFT, padx=12)
+            tk.Button(bottom, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, bg=self.theme.accent_neutral, **bstyle).pack(side=tk.LEFT, padx=12)
+
+            frame.columnconfigure(1, weight=1)
+
+        def on_edit() -> None:
+            ref = parse_selected_ref()
+            if ref is None:
+                messagebox.showwarning(self.t("info"), "请先选择成员！" if self.locale == "zh_CN" else "Select a member.", parent=win)
+                return
+            gi, mi = ref
+            if gi >= len(self.data.get("groups", [])):
+                return
+            group = self.data["groups"][gi]
+            members = group.get("members", [])
+            if not isinstance(members, list) or mi >= len(members):
+                return
+            member = members[mi]
+            src_group_name = str(group.get("name", "")).strip()
+
+            dialog = tk.Toplevel(win)
+            dialog.title("编辑成员" if self.locale == "zh_CN" else "Edit Member")
+            dialog.geometry("520x300")
+            dialog.configure(bg=self.theme.bg_primary)
+            dialog.transient(win)
+            dialog.grab_set()
+
+            title_frame = tk.Frame(dialog, bg=self.theme.accent_blue, height=52)
+            title_frame.pack(fill=tk.X)
+            title_frame.pack_propagate(False)
+            tk.Label(
+                title_frame,
+                text="✏️ 编辑成员信息" if self.locale == "zh_CN" else "Edit Member",
+                font=self.font_header,
+                bg=self.theme.accent_blue,
+                fg="white",
+                pady=12,
+            ).pack(fill=tk.X)
+
+            frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=24, pady=18)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(frame, text="姓名：" if self.locale == "zh_CN" else "Name:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=0, column=0, sticky="w", pady=10)
+            name_entry = tk.Entry(frame, width=30, font=self.font_body, bg=self.theme.bg_secondary, fg=self.theme.text_primary, bd=1, relief=tk.SOLID, highlightbackground=self.theme.border, highlightthickness=1)
+            name_entry.insert(0, str(member.get("name", "")).strip())
+            name_entry.grid(row=0, column=1, sticky="ew", pady=10, padx=10)
+
+            tk.Label(frame, text="角色：" if self.locale == "zh_CN" else "Role:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=1, column=0, sticky="w", pady=10)
+            role_var = tk.StringVar(value=str(member.get("role", "组员")).strip() or "组员")
+            role_combo = ttk.Combobox(frame, textvariable=role_var, values=["组长", "组员"], state="readonly", width=27)
+            role_combo.grid(row=1, column=1, sticky="ew", pady=10, padx=10)
+
+            tk.Label(frame, text="所属组：" if self.locale == "zh_CN" else "Group:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=2, column=0, sticky="w", pady=10)
+            gvar = tk.StringVar(value=src_group_name)
+            gcombo = ttk.Combobox(frame, textvariable=gvar, values=group_names(), state="readonly", width=27)
+            gcombo.grid(row=2, column=1, sticky="ew", pady=10, padx=10)
+
+            def on_save() -> None:
+                new_name = name_entry.get().strip()
+                new_role = role_var.get().strip() or "组员"
+                dest_group_name = gvar.get().strip()
+                if not new_name:
+                    messagebox.showerror(self.t("err"), "请输入姓名！" if self.locale == "zh_CN" else "Enter a name.", parent=dialog)
+                    return
+                if not dest_group_name:
+                    messagebox.showerror(self.t("err"), "请选择所属组！" if self.locale == "zh_CN" else "Select a group.", parent=dialog)
+                    return
+                dest_gi = None
+                for i, g in enumerate(self.data.get("groups", [])):
+                    if str(g.get("name", "")).strip() == dest_group_name:
+                        dest_gi = i
+                        break
+                if dest_gi is None:
+                    messagebox.showerror(self.t("err"), "所属组不存在。" if self.locale == "zh_CN" else "Group not found.", parent=dialog)
+                    return
+                if dest_gi == gi:
+                    for i, m in enumerate(members):
+                        if i != mi and str(m.get("name", "")).strip() == new_name:
+                            messagebox.showerror(self.t("err"), "该小组已存在同名成员！" if self.locale == "zh_CN" else "Duplicate member.", parent=dialog)
+                            return
+                    old_name = str(member.get("name", "")).strip()
+                    member["name"] = new_name
+                    member["role"] = new_role
+                    if old_name != new_name:
+                        self.add_history(src_group_name, f"成员重命名：{old_name} → {new_name}")
+                    else:
+                        self.add_history(src_group_name, f"编辑成员【{new_name}】")
+                else:
+                    dest_group = self.data["groups"][dest_gi]
+                    dest_members = dest_group.setdefault("members", [])
+                    if any(str(m.get("name", "")).strip() == new_name for m in dest_members):
+                        messagebox.showerror(self.t("err"), "目标小组已存在同名成员。" if self.locale == "zh_CN" else "Duplicate member.", parent=dialog)
+                        return
+                    moved = {"name": new_name, "role": new_role}
+                    dest_members.append(moved)
+                    del members[mi]
+                    self.add_history(src_group_name, f"成员【{new_name}】转移到【{dest_group_name}】")
+                    self.add_history(dest_group_name, f"接收成员【{new_name}】（来自【{src_group_name}】）")
+
+                self._mark_dirty()
+                self.refresh_all()
+                reload_tree()
+                dialog.destroy()
+
+            bottom = tk.Frame(frame, bg=self.theme.bg_primary)
+            bottom.grid(row=3, column=0, columnspan=2, pady=18)
+            bstyle = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
+            tk.Button(bottom, text="保存" if self.locale == "zh_CN" else "Save", command=on_save, bg=self.theme.accent_green, **bstyle).pack(side=tk.LEFT, padx=12)
+            tk.Button(bottom, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, bg=self.theme.accent_neutral, **bstyle).pack(side=tk.LEFT, padx=12)
+
+            frame.columnconfigure(1, weight=1)
+
+        def on_delete() -> None:
+            ref = parse_selected_ref()
+            if ref is None:
+                messagebox.showwarning(self.t("info"), "请先选择成员！" if self.locale == "zh_CN" else "Select a member.", parent=win)
+                return
+            gi, mi = ref
+            if gi >= len(self.data.get("groups", [])):
+                return
+            group = self.data["groups"][gi]
+            members = group.get("members", [])
+            if not isinstance(members, list) or mi >= len(members):
+                return
+            member_name = str(members[mi].get("name", "")).strip()
+            gname = str(group.get("name", "")).strip()
+            msg = f"确定要删除成员 '{member_name}' 吗？\n此操作不可恢复！" if self.locale == "zh_CN" else f"Delete '{member_name}'?"
+            if not messagebox.askyesno(self.t("confirm"), msg, parent=win):
+                return
+            members.pop(mi)
+            self.add_history(gname, f"删除成员【{member_name}】")
+            self._mark_dirty()
+            self.refresh_all()
+            reload_tree()
+
+        tk.Button(btn_frame, text="➕ 添加" if self.locale == "zh_CN" else "Add", command=on_add, bg=self.theme.accent_green, **btn_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="✏️ 编辑" if self.locale == "zh_CN" else "Edit", command=on_edit, bg=self.theme.accent_blue, **btn_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="🗑️ 删除" if self.locale == "zh_CN" else "Delete", command=on_delete, bg=self.theme.accent_red, **btn_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="⬆️ 导出Excel" if self.locale == "zh_CN" else "Export Excel", command=export_excel, bg=self.theme.accent_purple, **btn_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="⬇️ 导入Excel" if self.locale == "zh_CN" else "Import Excel", command=import_excel, bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="关闭" if self.locale == "zh_CN" else "Close", command=win.destroy, bg=self.theme.accent_neutral, **btn_style).pack(side=tk.RIGHT, padx=5)
 
     def open_color_check(self) -> None:
         win = tk.Toplevel(self.root)
