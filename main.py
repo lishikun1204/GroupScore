@@ -50,31 +50,31 @@ class Theme:
 
 
 LIGHT_THEME = Theme(
-    bg_primary="#f5f7fa",
+    bg_primary="#f6f8fb",
     bg_secondary="#ffffff",
-    bg_surface="#f8f9fa",
-    text_primary="#2c3e50",
-    text_secondary="#7f8c8d",
-    border="#dcdfe6",
-    accent_blue="#3498db",
-    accent_green="#2ecc71",
-    accent_red="#e74c3c",
-    accent_purple="#9b59b6",
-    accent_neutral="#34495e",
+    bg_surface="#eef2f7",
+    text_primary="#0f172a",
+    text_secondary="#475569",
+    border="#cbd5e1",
+    accent_blue="#2563eb",
+    accent_green="#15803d",
+    accent_red="#b91c1c",
+    accent_purple="#7c3aed",
+    accent_neutral="#334155",
 )
 
 DARK_THEME = Theme(
-    bg_primary="#0f141a",
-    bg_secondary="#141b24",
-    bg_surface="#1b2430",
-    text_primary="#e6eef8",
-    text_secondary="#9fb0c0",
-    border="#2a3646",
-    accent_blue="#4aa3ff",
-    accent_green="#45d483",
-    accent_red="#ff6b5e",
-    accent_purple="#c08cff",
-    accent_neutral="#6b7c8e",
+    bg_primary="#0b1220",
+    bg_secondary="#0f172a",
+    bg_surface="#111c33",
+    text_primary="#e2e8f0",
+    text_secondary="#94a3b8",
+    border="#23304a",
+    accent_blue="#3b82f6",
+    accent_green="#22c55e",
+    accent_red="#ef4444",
+    accent_purple="#a78bfa",
+    accent_neutral="#94a3b8",
 )
 
 GROUP_COLOR_PALETTE: list[dict[str, str]] = [
@@ -320,6 +320,8 @@ class GroupScoreApp:
         self.locale = resolve_locale(self.config.locale)
         self.strings = STRINGS.get(self.locale, STRINGS["zh_CN"])
         self.theme = resolve_theme(self.config.theme)
+        self._startup_t0 = time.perf_counter()
+        self._first_render_logged = False
 
         self._save_after_id: Optional[str] = None
         self._layout_after_id: Optional[str] = None
@@ -364,6 +366,11 @@ class GroupScoreApp:
                 top = event.widget.winfo_toplevel()
             except Exception:
                 return None
+            w: Any = getattr(event, "widget", None)
+            while w is not None:
+                if bool(getattr(w, "_allow_mousewheel", False)):
+                    return None
+                w = getattr(w, "master", None)
             return "break" if top == self.root else None
 
         for seq in ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>", "<Button-5>"):
@@ -374,6 +381,19 @@ class GroupScoreApp:
 
     def t(self, key: str) -> str:
         return self.strings.get(key, key)
+
+    def _fg_on(self, bg: str) -> str:
+        return _best_text_color(str(bg))
+
+    def _write_metric(self, payload: dict[str, Any]) -> None:
+        try:
+            out_dir = os.path.join(get_app_dir(), "perf_artifacts")
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "metrics.jsonl")
+            with open(out_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def _configure_scaling(self) -> None:
         try:
@@ -404,6 +424,35 @@ class GroupScoreApp:
             foreground=self.theme.text_primary,
             font=self.font_title,
         )
+        self.style.configure(
+            "Treeview",
+            background=self.theme.bg_secondary,
+            fieldbackground=self.theme.bg_secondary,
+            foreground=self.theme.text_primary,
+            bordercolor=self.theme.border,
+            lightcolor=self.theme.border,
+            darkcolor=self.theme.border,
+            rowheight=max(22, int(round(26 * max(0.8, float(self.config.font_scale))))),
+        )
+        self.style.configure(
+            "Treeview.Heading",
+            background=self.theme.bg_surface,
+            foreground=self.theme.text_primary,
+            relief=tk.FLAT,
+            font=self.font_title,
+        )
+        sel_bg = self.theme.accent_blue
+        sel_fg = _best_text_color(sel_bg)
+        self.style.map(
+            "Treeview",
+            background=[("selected", sel_bg)],
+            foreground=[("selected", sel_fg)],
+        )
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", self.theme.bg_secondary)],
+            foreground=[("readonly", self.theme.text_primary)],
+        )
 
     def _configure_window_defaults(self) -> None:
         try:
@@ -412,7 +461,7 @@ class GroupScoreApp:
             w = max(900, int(sw * 0.75))
             h = max(560, int(sh * 0.75))
             self.root.geometry(f"{w}x{h}")
-            self.root.minsize(900, 560)
+            self.root.minsize(380, 560)
         except Exception:
             self.root.geometry("1200x700")
 
@@ -458,19 +507,54 @@ class GroupScoreApp:
         self._layout_after_id = self.root.after(80, lambda: self._apply_responsive_layout(self.root.winfo_width()))
 
     def _apply_responsive_layout(self, width: int) -> None:
-        mode = "stack" if width < int(self.config.responsive_breakpoint_px) else "side"
+        w = int(width or 0)
+        if w >= 1920:
+            bp = "desktop_1920"
+            pad = 16
+            right_min = 380
+            mode = "side"
+        elif w >= 1440:
+            bp = "desktop_1440"
+            pad = 14
+            right_min = 360
+            mode = "side"
+        elif w >= 768:
+            bp = "tablet_768"
+            pad = 12
+            right_min = 0
+            mode = "stack"
+        else:
+            bp = "mobile_375"
+            pad = 10
+            right_min = 0
+            mode = "stack"
+
+        self._breakpoint = bp
+        self._outer_pad = int(pad)
+        self._card_gap = 12 if bp in ("desktop_1920", "desktop_1440") else 10
+        self._card_inner_pad = 14 if bp in ("desktop_1920",) else (12 if bp in ("desktop_1440", "tablet_768") else 10)
+
         if mode != self._layout_mode:
             self._layout_mode = mode
             if mode == "side":
-                self.main_container.columnconfigure(1, weight=0, minsize=320)
-                self.right_container.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-                self.left_container.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+                self.main_container.columnconfigure(1, weight=0, minsize=int(right_min))
+                self.right_container.grid(row=0, column=1, sticky="nsew", padx=self._outer_pad, pady=self._outer_pad)
+                self.left_container.grid(row=0, column=0, sticky="nsew", padx=self._outer_pad, pady=self._outer_pad)
             else:
                 self.main_container.columnconfigure(1, weight=0, minsize=0)
-                self.right_container.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
-                self.left_container.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+                self.right_container.grid(row=1, column=0, sticky="ew", padx=self._outer_pad, pady=(0, self._outer_pad))
+                self.left_container.grid(row=0, column=0, sticky="nsew", padx=self._outer_pad, pady=self._outer_pad)
                 self.main_container.rowconfigure(1, weight=0)
-        self._update_cards_columns()
+        else:
+            try:
+                self.right_container.grid_configure(padx=self._outer_pad, pady=self._outer_pad if mode == "side" else (0, self._outer_pad))
+                self.left_container.grid_configure(padx=self._outer_pad, pady=self._outer_pad)
+            except Exception:
+                pass
+            if mode == "side":
+                self.main_container.columnconfigure(1, weight=0, minsize=int(right_min))
+
+        self._update_cards_columns(w)
 
     @property
     def layout_mode(self) -> str:
@@ -661,12 +745,14 @@ class GroupScoreApp:
         tk.Button(btn_frame, text="+0.5", command=lambda: self.batch_change(0.5), **btn_style).pack(side="left", padx=3)
         tk.Button(btn_frame, text="-0.5", command=lambda: self.batch_change(-0.5), **btn_style).pack(side="left", padx=3)
 
+        bg_apply = self.theme.accent_blue
         tk.Button(batch_frame, text=self.t("btn_apply"), command=self.batch_apply_custom,
-                  bg=self.theme.accent_blue, fg="white", font=self.font_body, bd=0, pady=8).grid(
+                  bg=bg_apply, fg=_best_text_color(bg_apply), font=self.font_body, bd=0, pady=8).grid(
             row=3, column=0, columnspan=2, padx=6, pady=(0, 10), sticky="ew"
         )
 
-        tk.Button(batch_frame, text=self.t("btn_reset_scores"), bg=self.theme.accent_red, fg="white",
+        bg_reset = self.theme.accent_red
+        tk.Button(batch_frame, text=self.t("btn_reset_scores"), bg=bg_reset, fg=_best_text_color(bg_reset),
                   command=self.reset_all, font=self.font_body, bd=0, pady=8).grid(
             row=4, column=0, columnspan=2, padx=6, pady=(0, 6), sticky="ew"
         )
@@ -731,8 +817,45 @@ class GroupScoreApp:
             self.cards_placeholder.destroy()
             self.cards_placeholder = None
 
-        self.cards_frame = tk.Frame(self.left_container, bg=self.theme.bg_primary)
-        self.cards_frame.pack(fill=tk.BOTH, expand=True)
+        self.cards_scroller = tk.Frame(self.left_container, bg=self.theme.bg_primary)
+        self.cards_scroller.pack(fill=tk.BOTH, expand=True)
+
+        self.cards_canvas = tk.Canvas(self.cards_scroller, bg=self.theme.bg_primary, highlightthickness=0, bd=0)
+        setattr(self.cards_canvas, "_allow_mousewheel", True)
+        self.cards_scrollbar = ttk.Scrollbar(self.cards_scroller, orient=tk.VERTICAL, command=self.cards_canvas.yview)
+        self.cards_canvas.configure(yscrollcommand=self.cards_scrollbar.set)
+        self.cards_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.cards_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.cards_frame = tk.Frame(self.cards_canvas, bg=self.theme.bg_primary)
+        self._cards_frame_window = self.cards_canvas.create_window((0, 0), window=self.cards_frame, anchor="nw")
+
+        def on_frame_configure(_e: tk.Event) -> None:
+            try:
+                self.cards_canvas.configure(scrollregion=self.cards_canvas.bbox("all"))
+            except Exception:
+                pass
+
+        def on_canvas_configure(_e: tk.Event) -> None:
+            try:
+                self.cards_canvas.itemconfigure(self._cards_frame_window, width=self.cards_canvas.winfo_width())
+            except Exception:
+                pass
+
+        self.cards_frame.bind("<Configure>", on_frame_configure)
+        self.cards_canvas.bind("<Configure>", on_canvas_configure)
+
+        def on_mousewheel(e: tk.Event) -> None:
+            try:
+                delta = int(getattr(e, "delta", 0))
+                if delta:
+                    self.cards_canvas.yview_scroll(int(-delta / 120), "units")
+            except Exception:
+                pass
+
+        self.cards_canvas.bind("<MouseWheel>", on_mousewheel)
+        self.cards_canvas.bind("<Button-4>", lambda _e: self.cards_canvas.yview_scroll(-3, "units"))
+        self.cards_canvas.bind("<Button-5>", lambda _e: self.cards_canvas.yview_scroll(3, "units"))
 
         self.group_cards: list[dict[str, Any]] = []
         self._create_cards_chunk(0)
@@ -834,8 +957,9 @@ class GroupScoreApp:
         card.bind("<Enter>", on_enter)
         card.bind("<Leave>", on_leave)
 
+        pad = int(getattr(self, "_card_inner_pad", 12))
         content_frame = tk.Frame(card, bg=self.theme.bg_secondary)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=pad, pady=pad)
 
         score_var = tk.StringVar(value=f"{float(group.get('score', 0.0)):.1f}")
         score_label = tk.Label(content_frame, textvariable=score_var, bg=self.theme.bg_secondary, fg=border_color,
@@ -849,14 +973,42 @@ class GroupScoreApp:
         btn_frame = tk.Frame(content_frame, bg=self.theme.bg_secondary)
         btn_frame.pack(pady=8)
         btn_style = {"font": self.font_body, "bd": 0, "padx": 10, "pady": 6}
-        tk.Button(btn_frame, text="+1", bg=self.theme.accent_green, fg="white",
-                  command=lambda g=group_idx: self.change_score(g, 1.0), **btn_style).grid(row=0, column=0, padx=4, pady=2)
-        tk.Button(btn_frame, text="-1", bg=self.theme.accent_red, fg="white",
-                  command=lambda g=group_idx: self.change_score(g, -1.0), **btn_style).grid(row=0, column=1, padx=4, pady=2)
-        tk.Button(btn_frame, text="+0.5", bg=self.theme.accent_blue, fg="white",
-                  command=lambda g=group_idx: self.change_score(g, 0.5), **btn_style).grid(row=0, column=2, padx=4, pady=2)
-        tk.Button(btn_frame, text="-0.5", bg=self.theme.accent_purple, fg="white",
-                  command=lambda g=group_idx: self.change_score(g, -0.5), **btn_style).grid(row=0, column=3, padx=4, pady=2)
+        bg_p1 = self.theme.accent_green
+        tk.Button(
+            btn_frame,
+            text="+1",
+            bg=bg_p1,
+            fg=self._fg_on(bg_p1),
+            command=lambda g=group_idx: self.change_score(g, 1.0),
+            **btn_style,
+        ).grid(row=0, column=0, padx=4, pady=2)
+        bg_n1 = self.theme.accent_red
+        tk.Button(
+            btn_frame,
+            text="-1",
+            bg=bg_n1,
+            fg=self._fg_on(bg_n1),
+            command=lambda g=group_idx: self.change_score(g, -1.0),
+            **btn_style,
+        ).grid(row=0, column=1, padx=4, pady=2)
+        bg_p05 = self.theme.accent_blue
+        tk.Button(
+            btn_frame,
+            text="+0.5",
+            bg=bg_p05,
+            fg=self._fg_on(bg_p05),
+            command=lambda g=group_idx: self.change_score(g, 0.5),
+            **btn_style,
+        ).grid(row=0, column=2, padx=4, pady=2)
+        bg_n05 = self.theme.accent_purple
+        tk.Button(
+            btn_frame,
+            text="-0.5",
+            bg=bg_n05,
+            fg=self._fg_on(bg_n05),
+            command=lambda g=group_idx: self.change_score(g, -0.5),
+            **btn_style,
+        ).grid(row=0, column=3, padx=4, pady=2)
 
         self.group_cards.append(
             {
@@ -932,8 +1084,14 @@ class GroupScoreApp:
 
         tick(0)
 
-    def _update_cards_columns(self) -> None:
-        columns = 2
+    def _update_cards_columns(self, width: int) -> None:
+        w = int(width or 0)
+        if w >= 1920:
+            columns = 3
+        elif w >= 768:
+            columns = 2
+        else:
+            columns = 1
         if columns == self._cards_columns:
             return
         self._cards_columns = columns
@@ -945,15 +1103,26 @@ class GroupScoreApp:
         for child in self.cards_frame.grid_slaves():
             child.grid_forget()
         cols = max(1, int(self._cards_columns))
+        gap = int(getattr(self, "_card_gap", 10))
+        last_cols = int(getattr(self, "_last_layout_cols", cols))
+        last_rows = int(getattr(self, "_last_layout_rows", 0))
+        max_cols = max(cols, last_cols)
         for i, card_info in enumerate(self.group_cards):
             row = i // cols
             col = i % cols
-            card_info["card"].grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+            card_info["card"].grid(row=row, column=col, padx=gap, pady=gap, sticky="nsew")
+        rows = max(1, (len(self.group_cards) + cols - 1) // cols)
+        max_rows = max(rows, last_rows)
+        for c in range(max_cols):
+            self.cards_frame.grid_columnconfigure(c, weight=0, uniform="")
         for c in range(cols):
             self.cards_frame.grid_columnconfigure(c, weight=1, uniform="cards")
-        rows = max(1, (len(self.group_cards) + cols - 1) // cols)
+        for r in range(max_rows):
+            self.cards_frame.grid_rowconfigure(r, weight=0, uniform="")
         for r in range(rows):
             self.cards_frame.grid_rowconfigure(r, weight=1, uniform="cards")
+        self._last_layout_cols = cols
+        self._last_layout_rows = rows
 
     def change_score(self, group_idx: int, delta: float) -> None:
         self.data["groups"][group_idx]["score"] = float(self.data["groups"][group_idx].get("score", 0.0)) + float(delta)
@@ -999,12 +1168,87 @@ class GroupScoreApp:
         group_menu.add_separator()
         group_menu.add_command(label=self.t("menu_add_group"), command=lambda: self.add_new_group(None))
 
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label=("视图" if self.locale == "zh_CN" else "View"), menu=view_menu)
+        view_menu.add_command(label="1920×1080", command=lambda: self.set_window_size(1920, 1080))
+        view_menu.add_command(label="1440×900", command=lambda: self.set_window_size(1440, 900))
+        view_menu.add_command(label="768×1024", command=lambda: self.set_window_size(768, 1024))
+        view_menu.add_command(label="375×667", command=lambda: self.set_window_size(375, 667))
+
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label=self.t("menu_help"), menu=help_menu)
         help_menu.add_command(label=self.t("menu_usage"), command=self.show_help)
+        help_menu.add_separator()
+        help_menu.add_command(label=("可用性反馈" if self.locale == "zh_CN" else "Feedback"), command=self.open_feedback_dialog)
 
     def show_help(self) -> None:
         messagebox.showinfo(self.t("help_title"), self.t("help_text"))
+
+    def set_window_size(self, width: int, height: int) -> None:
+        try:
+            self.root.minsize(1, 1)
+            self.root.geometry(f"{int(width)}x{int(height)}")
+        finally:
+            self.root.minsize(380, 560)
+
+    def open_feedback_dialog(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("可用性反馈" if self.locale == "zh_CN" else "Feedback")
+        dialog.geometry("560x380")
+        dialog.configure(bg=self.theme.bg_primary)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        title_frame = tk.Frame(dialog, bg=self.theme.accent_blue, height=52)
+        title_frame.pack(fill=tk.X)
+        title_frame.pack_propagate(False)
+        tk.Label(
+            title_frame,
+            text="📝 可用性反馈" if self.locale == "zh_CN" else "Feedback",
+            font=self.font_header,
+            bg=self.theme.accent_blue,
+            fg=self._fg_on(self.theme.accent_blue),
+            pady=12,
+        ).pack(fill=tk.X)
+
+        frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=18, pady=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(frame, text="满意度（1-5）：" if self.locale == "zh_CN" else "Rating (1-5):", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        rating_var = tk.StringVar(value="5")
+        rating_combo = ttk.Combobox(frame, textvariable=rating_var, values=["1", "2", "3", "4", "5"], state="readonly", width=6)
+        rating_combo.grid(row=0, column=1, sticky="w", pady=(0, 10))
+
+        tk.Label(frame, text="反馈内容：" if self.locale == "zh_CN" else "Notes:", font=self.font_body, bg=self.theme.bg_primary, fg=self.theme.text_primary).grid(row=1, column=0, sticky="nw")
+        notes = tk.Text(frame, height=10, bg=self.theme.bg_secondary, fg=self.theme.text_primary, font=self.font_small, bd=1, relief=tk.SOLID, highlightthickness=1, highlightbackground=self.theme.border, wrap=tk.WORD)
+        notes.grid(row=1, column=1, sticky="nsew", padx=(10, 0))
+
+        def save_feedback() -> None:
+            payload = {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "rating": rating_var.get().strip(),
+                "notes": notes.get("1.0", tk.END).strip(),
+                "theme": str(self.config.theme),
+                "window": {"width": int(self.root.winfo_width()), "height": int(self.root.winfo_height())},
+                "breakpoint": str(getattr(self, "_breakpoint", "")),
+            }
+            out_dir = os.path.join(get_app_dir(), "perf_artifacts")
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "feedback.jsonl")
+            with open(out_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            messagebox.showinfo(self.t("info"), "已保存反馈。" if self.locale == "zh_CN" else "Saved.", parent=dialog)
+            dialog.destroy()
+
+        btns = tk.Frame(frame, bg=self.theme.bg_primary)
+        btns.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        bg_save = self.theme.accent_green
+        tk.Button(btns, text="保存" if self.locale == "zh_CN" else "Save", command=save_feedback, font=self.font_body, bd=0, padx=18, pady=8, bg=bg_save, fg=self._fg_on(bg_save)).pack(side=tk.RIGHT, padx=(10, 0))
+        bg_cancel = self.theme.accent_neutral
+        tk.Button(btns, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, font=self.font_body, bd=0, padx=18, pady=8, bg=bg_cancel, fg=self._fg_on(bg_cancel)).pack(side=tk.RIGHT)
+
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(1, weight=1)
 
     def _rebuild_cards(self) -> None:
         if getattr(self, "cards_frame", None) is None:
@@ -1074,7 +1318,7 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(main_frame, bg=self.theme.bg_primary)
         btn_frame.pack(fill=tk.X, pady=12)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8}
 
         def on_edit() -> None:
             idx = selected_group_index()
@@ -1352,7 +1596,7 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(main_frame, bg=self.theme.bg_primary)
         btn_frame.pack(fill=tk.X, pady=12)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8}
 
         def on_add() -> None:
             dialog = tk.Toplevel(win)
@@ -1370,7 +1614,7 @@ class GroupScoreApp:
                 text="➕ 添加新成员" if self.locale == "zh_CN" else "Add Member",
                 font=self.font_header,
                 bg=self.theme.accent_blue,
-                fg="white",
+                fg=self._fg_on(self.theme.accent_blue),
                 pady=12,
             ).pack(fill=tk.X)
 
@@ -1423,9 +1667,11 @@ class GroupScoreApp:
 
             bottom = tk.Frame(frame, bg=self.theme.bg_primary)
             bottom.grid(row=3, column=0, columnspan=2, pady=18)
-            bstyle = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
-            tk.Button(bottom, text="添加" if self.locale == "zh_CN" else "Add", command=on_save, bg=self.theme.accent_green, **bstyle).pack(side=tk.LEFT, padx=12)
-            tk.Button(bottom, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, bg=self.theme.accent_neutral, **bstyle).pack(side=tk.LEFT, padx=12)
+            bstyle = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8}
+            bg_add = self.theme.accent_green
+            tk.Button(bottom, text="添加" if self.locale == "zh_CN" else "Add", command=on_save, bg=bg_add, fg=self._fg_on(bg_add), **bstyle).pack(side=tk.LEFT, padx=12)
+            bg_cancel = self.theme.accent_neutral
+            tk.Button(bottom, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, bg=bg_cancel, fg=self._fg_on(bg_cancel), **bstyle).pack(side=tk.LEFT, padx=12)
 
             frame.columnconfigure(1, weight=1)
 
@@ -1459,7 +1705,7 @@ class GroupScoreApp:
                 text="✏️ 编辑成员信息" if self.locale == "zh_CN" else "Edit Member",
                 font=self.font_header,
                 bg=self.theme.accent_blue,
-                fg="white",
+                fg=self._fg_on(self.theme.accent_blue),
                 pady=12,
             ).pack(fill=tk.X)
 
@@ -1530,9 +1776,11 @@ class GroupScoreApp:
 
             bottom = tk.Frame(frame, bg=self.theme.bg_primary)
             bottom.grid(row=3, column=0, columnspan=2, pady=18)
-            bstyle = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
-            tk.Button(bottom, text="保存" if self.locale == "zh_CN" else "Save", command=on_save, bg=self.theme.accent_green, **bstyle).pack(side=tk.LEFT, padx=12)
-            tk.Button(bottom, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, bg=self.theme.accent_neutral, **bstyle).pack(side=tk.LEFT, padx=12)
+            bstyle = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8}
+            bg_save = self.theme.accent_green
+            tk.Button(bottom, text="保存" if self.locale == "zh_CN" else "Save", command=on_save, bg=bg_save, fg=self._fg_on(bg_save), **bstyle).pack(side=tk.LEFT, padx=12)
+            bg_cancel = self.theme.accent_neutral
+            tk.Button(bottom, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy, bg=bg_cancel, fg=self._fg_on(bg_cancel), **bstyle).pack(side=tk.LEFT, padx=12)
 
             frame.columnconfigure(1, weight=1)
 
@@ -1559,12 +1807,18 @@ class GroupScoreApp:
             self.refresh_all()
             reload_tree()
 
-        tk.Button(btn_frame, text="➕ 添加" if self.locale == "zh_CN" else "Add", command=on_add, bg=self.theme.accent_green, **btn_style).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="✏️ 编辑" if self.locale == "zh_CN" else "Edit", command=on_edit, bg=self.theme.accent_blue, **btn_style).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="🗑️ 删除" if self.locale == "zh_CN" else "Delete", command=on_delete, bg=self.theme.accent_red, **btn_style).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="⬆️ 导出Excel" if self.locale == "zh_CN" else "Export Excel", command=export_excel, bg=self.theme.accent_purple, **btn_style).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="⬇️ 导入Excel" if self.locale == "zh_CN" else "Import Excel", command=import_excel, bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="关闭" if self.locale == "zh_CN" else "Close", command=win.destroy, bg=self.theme.accent_neutral, **btn_style).pack(side=tk.RIGHT, padx=5)
+        bg_add = self.theme.accent_green
+        tk.Button(btn_frame, text="➕ 添加" if self.locale == "zh_CN" else "Add", command=on_add, bg=bg_add, fg=self._fg_on(bg_add), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_edit = self.theme.accent_blue
+        tk.Button(btn_frame, text="✏️ 编辑" if self.locale == "zh_CN" else "Edit", command=on_edit, bg=bg_edit, fg=self._fg_on(bg_edit), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_del = self.theme.accent_red
+        tk.Button(btn_frame, text="🗑️ 删除" if self.locale == "zh_CN" else "Delete", command=on_delete, bg=bg_del, fg=self._fg_on(bg_del), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_export = self.theme.accent_purple
+        tk.Button(btn_frame, text="⬆️ 导出Excel" if self.locale == "zh_CN" else "Export Excel", command=export_excel, bg=bg_export, fg=self._fg_on(bg_export), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_import = self.theme.accent_neutral
+        tk.Button(btn_frame, text="⬇️ 导入Excel" if self.locale == "zh_CN" else "Import Excel", command=import_excel, bg=bg_import, fg=self._fg_on(bg_import), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_close = self.theme.accent_neutral
+        tk.Button(btn_frame, text="关闭" if self.locale == "zh_CN" else "Close", command=win.destroy, bg=bg_close, fg=self._fg_on(bg_close), **btn_style).pack(side=tk.RIGHT, padx=5)
 
     def open_color_check(self) -> None:
         win = tk.Toplevel(self.root)
@@ -1640,7 +1894,7 @@ class GroupScoreApp:
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
         tk.Label(title_frame, text="➕ 添加新小组" if self.locale == "zh_CN" else "Add Group",
-                 font=self.font_header, bg=self.theme.accent_blue, fg="white", pady=12).pack(fill=tk.X)
+                 font=self.font_header, bg=self.theme.accent_blue, fg=self._fg_on(self.theme.accent_blue), pady=12).pack(fill=tk.X)
 
         frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=24, pady=20)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -1689,7 +1943,7 @@ class GroupScoreApp:
             sync_swatch()
 
         tk.Button(color_line, text="选择颜色…", font=self.font_body, bd=0, padx=10, pady=6,
-                  bg=self.theme.accent_neutral, fg="white", command=on_pick_color).pack(side=tk.LEFT, padx=(8, 0))
+                  bg=self.theme.accent_neutral, fg=self._fg_on(self.theme.accent_neutral), command=on_pick_color).pack(side=tk.LEFT, padx=(8, 0))
         color_swatch.bind("<Button-1>", lambda _e: on_pick_color())
         color_hex_label.bind("<Button-1>", lambda _e: on_pick_color())
 
@@ -1730,11 +1984,13 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(frame, bg=self.theme.bg_primary)
         btn_frame.grid(row=2, column=0, columnspan=2, pady=18)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8}
+        bg_add = self.theme.accent_green
         tk.Button(btn_frame, text="添加" if self.locale == "zh_CN" else "Add", command=on_add,
-                  bg=self.theme.accent_green, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_add, fg=self._fg_on(bg_add), **btn_style).pack(side=tk.LEFT, padx=12)
+        bg_cancel = self.theme.accent_neutral
         tk.Button(btn_frame, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy,
-                  bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_cancel, fg=self._fg_on(bg_cancel), **btn_style).pack(side=tk.LEFT, padx=12)
 
         frame.columnconfigure(1, weight=1)
 
@@ -1751,7 +2007,7 @@ class GroupScoreApp:
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
         tk.Label(title_frame, text="✏️ 编辑小组" if self.locale == "zh_CN" else "Edit Group",
-                 font=self.font_header, bg=self.theme.accent_blue, fg="white", pady=12).pack(fill=tk.X)
+                 font=self.font_header, bg=self.theme.accent_blue, fg=self._fg_on(self.theme.accent_blue), pady=12).pack(fill=tk.X)
 
         frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=24, pady=20)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -1802,7 +2058,7 @@ class GroupScoreApp:
             sync_swatch()
 
         tk.Button(color_line, text="选择颜色…", font=self.font_body, bd=0, padx=10, pady=6,
-                  bg=self.theme.accent_neutral, fg="white", command=on_pick_color).pack(side=tk.LEFT, padx=(8, 0))
+                  bg=self.theme.accent_neutral, fg=self._fg_on(self.theme.accent_neutral), command=on_pick_color).pack(side=tk.LEFT, padx=(8, 0))
         color_swatch.bind("<Button-1>", lambda _e: on_pick_color())
         color_hex_label.bind("<Button-1>", lambda _e: on_pick_color())
 
@@ -1871,11 +2127,13 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(frame, bg=self.theme.bg_primary)
         btn_frame.grid(row=2, column=0, columnspan=2, pady=18)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8}
+        bg_save = self.theme.accent_blue
         tk.Button(btn_frame, text="保存" if self.locale == "zh_CN" else "Save", command=on_save,
-                  bg=self.theme.accent_blue, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_save, fg=self._fg_on(bg_save), **btn_style).pack(side=tk.LEFT, padx=12)
+        bg_cancel = self.theme.accent_neutral
         tk.Button(btn_frame, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy,
-                  bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_cancel, fg=self._fg_on(bg_cancel), **btn_style).pack(side=tk.LEFT, padx=12)
 
         frame.columnconfigure(1, weight=1)
 
@@ -1946,7 +2204,7 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(main_frame, bg=self.theme.bg_primary)
         btn_frame.pack(fill=tk.X, pady=12)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 14, "pady": 8}
 
         def on_add() -> None:
             self.add_member(group_idx, on_updated=reload_members)
@@ -2049,16 +2307,21 @@ class GroupScoreApp:
             self.delete_member(group_idx, idx)
             reload_members()
 
+        bg_add = self.theme.accent_green
         tk.Button(btn_frame, text="➕ 添加" if self.config.enable_emoji else ("添加" if self.locale == "zh_CN" else "Add"),
-                  command=on_add, bg=self.theme.accent_green, **btn_style).pack(side=tk.LEFT, padx=5)
+                  command=on_add, bg=bg_add, fg=self._fg_on(bg_add), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_edit = self.theme.accent_blue
         tk.Button(btn_frame, text="✏️ 编辑" if self.config.enable_emoji else ("编辑" if self.locale == "zh_CN" else "Edit"),
-                  command=on_edit, bg=self.theme.accent_blue, **btn_style).pack(side=tk.LEFT, padx=5)
+                  command=on_edit, bg=bg_edit, fg=self._fg_on(bg_edit), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_move = self.theme.accent_neutral
         tk.Button(btn_frame, text="🔁 更换小组" if self.config.enable_emoji else ("更换小组" if self.locale == "zh_CN" else "Move"),
-                  command=on_move, bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=5)
+                  command=on_move, bg=bg_move, fg=self._fg_on(bg_move), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_del = self.theme.accent_red
         tk.Button(btn_frame, text="🗑️ 删除" if self.config.enable_emoji else ("删除" if self.locale == "zh_CN" else "Delete"),
-                  command=on_delete, bg=self.theme.accent_red, **btn_style).pack(side=tk.LEFT, padx=5)
+                  command=on_delete, bg=bg_del, fg=self._fg_on(bg_del), **btn_style).pack(side=tk.LEFT, padx=5)
+        bg_close = self.theme.accent_neutral
         tk.Button(btn_frame, text="关闭" if self.locale == "zh_CN" else "Close", command=dialog.destroy,
-                  bg=self.theme.accent_neutral, **btn_style).pack(side=tk.RIGHT, padx=5)
+                  bg=bg_close, fg=self._fg_on(bg_close), **btn_style).pack(side=tk.RIGHT, padx=5)
 
     def add_member(self, group_idx: int, on_updated: Optional[Callable[[], None]] = None) -> None:
         dialog = tk.Toplevel(self.root)
@@ -2072,7 +2335,7 @@ class GroupScoreApp:
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
         tk.Label(title_frame, text="➕ 添加新成员" if self.locale == "zh_CN" else "Add Member",
-                 font=self.font_header, bg=self.theme.accent_green, fg="white", pady=12).pack(fill=tk.X)
+                 font=self.font_header, bg=self.theme.accent_green, fg=self._fg_on(self.theme.accent_green), pady=12).pack(fill=tk.X)
 
         frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=24, pady=20)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -2113,11 +2376,13 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(frame, bg=self.theme.bg_primary)
         btn_frame.grid(row=2, column=0, columnspan=2, pady=18)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8}
+        bg_add = self.theme.accent_green
         tk.Button(btn_frame, text="添加" if self.locale == "zh_CN" else "Add", command=on_add,
-                  bg=self.theme.accent_green, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_add, fg=self._fg_on(bg_add), **btn_style).pack(side=tk.LEFT, padx=12)
+        bg_cancel = self.theme.accent_neutral
         tk.Button(btn_frame, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy,
-                  bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_cancel, fg=self._fg_on(bg_cancel), **btn_style).pack(side=tk.LEFT, padx=12)
 
         frame.columnconfigure(1, weight=1)
 
@@ -2139,7 +2404,7 @@ class GroupScoreApp:
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
         tk.Label(title_frame, text="✏️ 编辑成员信息" if self.locale == "zh_CN" else "Edit Member",
-                 font=self.font_header, bg=self.theme.accent_blue, fg="white", pady=12).pack(fill=tk.X)
+                 font=self.font_header, bg=self.theme.accent_blue, fg=self._fg_on(self.theme.accent_blue), pady=12).pack(fill=tk.X)
 
         frame = tk.Frame(dialog, bg=self.theme.bg_primary, padx=24, pady=20)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -2179,11 +2444,13 @@ class GroupScoreApp:
 
         btn_frame = tk.Frame(frame, bg=self.theme.bg_primary)
         btn_frame.grid(row=2, column=0, columnspan=2, pady=18)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8, "fg": "white"}
+        btn_style = {"font": self.font_body, "bd": 0, "padx": 22, "pady": 8}
+        bg_save = self.theme.accent_blue
         tk.Button(btn_frame, text="保存" if self.locale == "zh_CN" else "Save", command=on_save,
-                  bg=self.theme.accent_blue, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_save, fg=self._fg_on(bg_save), **btn_style).pack(side=tk.LEFT, padx=12)
+        bg_cancel = self.theme.accent_neutral
         tk.Button(btn_frame, text="取消" if self.locale == "zh_CN" else "Cancel", command=dialog.destroy,
-                  bg=self.theme.accent_neutral, **btn_style).pack(side=tk.LEFT, padx=12)
+                  bg=bg_cancel, fg=self._fg_on(bg_cancel), **btn_style).pack(side=tk.LEFT, padx=12)
 
         frame.columnconfigure(1, weight=1)
 
@@ -2255,9 +2522,23 @@ class GroupScoreApp:
         self._history_dirty = False
 
     def refresh_all(self) -> None:
+        t0 = time.perf_counter()
         self.refresh_group_cards()
         self.refresh_ranking()
         self.refresh_history()
+        if not self._first_render_logged:
+            self._first_render_logged = True
+            self._write_metric(
+                {
+                    "event": "first_render",
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "ms_since_start": int(round((time.perf_counter() - float(self._startup_t0)) * 1000)),
+                    "ms_refresh_all": int(round((time.perf_counter() - float(t0)) * 1000)),
+                    "theme": str(self.config.theme),
+                    "window": {"width": int(self.root.winfo_width()), "height": int(self.root.winfo_height())},
+                    "breakpoint": str(getattr(self, "_breakpoint", "")),
+                }
+            )
 
     def set_theme(self, theme_name: str) -> None:
         self.config.theme = theme_name
@@ -2275,6 +2556,10 @@ class GroupScoreApp:
             self._configure_history_tags()
         if getattr(self, "cards_frame", None) is not None:
             self.cards_frame.configure(bg=self.theme.bg_primary)
+        if getattr(self, "cards_canvas", None) is not None:
+            self.cards_canvas.configure(bg=self.theme.bg_primary)
+        if getattr(self, "cards_scroller", None) is not None:
+            self.cards_scroller.configure(bg=self.theme.bg_primary)
             self._rebuild_cards()
         self._history_dirty = True
         self._ranking_dirty = True
