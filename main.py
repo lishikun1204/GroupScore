@@ -921,7 +921,7 @@ class GroupScoreApp:
             self.cards_frame,
             bg=self.theme.bg_secondary,
             highlightbackground=self.theme.border,
-            highlightcolor=self.theme.border,
+            highlightcolor=group_color,
             highlightthickness=1,
             bd=0,
         )
@@ -934,7 +934,7 @@ class GroupScoreApp:
 
         def on_enter(_e: tk.Event) -> None:
             try:
-                card.configure(highlightbackground=self.theme.accent_blue, highlightthickness=2)
+                card.configure(highlightbackground=group_color, highlightthickness=2)
             except Exception:
                 pass
 
@@ -952,7 +952,7 @@ class GroupScoreApp:
         content_frame.pack(fill=tk.BOTH, expand=True, padx=pad, pady=pad)
 
         score_var = tk.StringVar(value=f"{float(group.get('score', 0.0)):.1f}")
-        score_label = tk.Label(content_frame, textvariable=score_var, bg=self.theme.bg_secondary, fg=self.theme.accent_blue,
+        score_label = tk.Label(content_frame, textvariable=score_var, bg=self.theme.bg_secondary, fg=group_color,
                                font=self.font_score)
         score_label.pack(pady=(6, 0))
 
@@ -1004,8 +1004,13 @@ class GroupScoreApp:
             return
         group = self.data["groups"][idx]
         name = str(group.get("name", ""))
+        group_color = str(color)
         try:
-            card_info["card"].configure(highlightbackground=self.theme.border, highlightcolor=self.theme.border)
+            card_info["group_color"] = group_color
+        except Exception:
+            pass
+        try:
+            card_info["card"].configure(highlightbackground=self.theme.border, highlightcolor=group_color)
         except Exception:
             pass
         try:
@@ -1017,7 +1022,7 @@ class GroupScoreApp:
         except Exception:
             pass
         try:
-            card_info["score_label"].configure(fg=self.theme.accent_blue)
+            card_info["score_label"].configure(fg=group_color)
         except Exception:
             pass
 
