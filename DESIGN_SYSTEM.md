@@ -2,37 +2,37 @@
 
 本项目为 Tkinter 单机桌面客户端。此文档用于统一主界面配色、间距、排版与响应式规则，确保可读性与一致性。
 
-## 1. 配色体系
+## 1. 配色体系（清新青春风格）
 
 ### 1.1 语义颜色（Theme 字段）
 
 颜色定义位置：`Theme / LIGHT_THEME / DARK_THEME`（见 [main.py](file:///c:/Users/Administrator/PycharmProjects/PythonProject/main.py)）。
 
-#### Light
-- 背景（bg_primary）：#f6f8fb
+#### Light (薄荷清新)
+- 背景（bg_primary）：#f0fdf4 (极浅薄荷绿)
 - 卡片/面板（bg_secondary）：#ffffff
-- 浅层背景（bg_surface）：#eef2f7
-- 主文本（text_primary）：#0f172a
-- 次文本（text_secondary）：#475569
-- 边框（border）：#cbd5e1
-- 主色（accent_blue）：#2563eb
-- 成功（accent_green）：#15803d
-- 危险（accent_red）：#b91c1c
-- 辅助强调（accent_purple）：#7c3aed
-- 中性强调（accent_neutral）：#334155
-
-#### Dark
-- 背景（bg_primary）：#0b1220
-- 卡片/面板（bg_secondary）：#0f172a
-- 浅层背景（bg_surface）：#111c33
-- 主文本（text_primary）：#e2e8f0
-- 次文本（text_secondary）：#94a3b8
-- 边框（border）：#23304a
-- 主色（accent_blue）：#3b82f6
-- 成功（accent_green）：#22c55e
-- 危险（accent_red）：#ef4444
-- 辅助强调（accent_purple）：#a78bfa
+- 浅层背景（bg_surface）：#dcfce7 (浅薄荷绿)
+- 主文本（text_primary）：#1e293b
+- 次文本（text_secondary）：#64748b
+- 边框（border）：#bbf7d0
+- 主色（accent_blue）：#0ea5e9 (天蓝)
+- 成功（accent_green）：#22c55e (亮绿)
+- 危险（accent_red）：#f43f5e (亮红)
+- 辅助强调（accent_purple）：#a855f7 (亮紫)
 - 中性强调（accent_neutral）：#94a3b8
+
+#### Dark (深邃蓝绿)
+- 背景（bg_primary）：#0f172a (深蓝灰)
+- 卡片/面板（bg_secondary）：#1e293b
+- 浅层背景（bg_surface）：#334155
+- 主文本（text_primary）：#f8fafc
+- 次文本（text_secondary）：#cbd5e1
+- 边框（border）：#475569
+- 主色（accent_blue）：#38bdf8
+- 成功（accent_green）：#4ade80
+- 危险（accent_red）：#fb7185
+- 辅助强调（accent_purple）：#c084fc
+- 中性强调（accent_neutral）：#64748b
 
 ### 1.2 可访问性与对比度（WCAG 2.1 AA）
 

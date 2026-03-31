@@ -50,46 +50,46 @@ class Theme:
 
 
 LIGHT_THEME = Theme(
-    bg_primary="#f6f8fb",
+    bg_primary="#f0fdf4",      # 清新薄荷绿背景
     bg_secondary="#ffffff",
-    bg_surface="#eef2f7",
-    text_primary="#0f172a",
-    text_secondary="#475569",
-    border="#cbd5e1",
-    accent_blue="#2563eb",
-    accent_green="#15803d",
-    accent_red="#b91c1c",
-    accent_purple="#7c3aed",
-    accent_neutral="#334155",
-)
-
-DARK_THEME = Theme(
-    bg_primary="#0b1220",
-    bg_secondary="#0f172a",
-    bg_surface="#111c33",
-    text_primary="#e2e8f0",
-    text_secondary="#94a3b8",
-    border="#23304a",
-    accent_blue="#3b82f6",
-    accent_green="#22c55e",
-    accent_red="#ef4444",
-    accent_purple="#a78bfa",
+    bg_surface="#dcfce7",      # 更深的薄荷绿用于表面
+    text_primary="#1e293b",
+    text_secondary="#64748b",
+    border="#bbf7d0",
+    accent_blue="#0ea5e9",     # 天蓝
+    accent_green="#22c55e",    # 亮绿
+    accent_red="#f43f5e",      # 亮红
+    accent_purple="#a855f7",   # 亮紫
     accent_neutral="#94a3b8",
 )
 
+DARK_THEME = Theme(
+    bg_primary="#0f172a",      # 深蓝灰背景
+    bg_secondary="#1e293b",
+    bg_surface="#334155",
+    text_primary="#f8fafc",
+    text_secondary="#cbd5e1",
+    border="#475569",
+    accent_blue="#38bdf8",     # 适合暗色的天蓝
+    accent_green="#4ade80",    # 适合暗色的亮绿
+    accent_red="#fb7185",      # 适合暗色的亮红
+    accent_purple="#c084fc",   # 适合暗色的亮紫
+    accent_neutral="#64748b",
+)
+
 GROUP_COLOR_PALETTE: list[dict[str, str]] = [
-    {"hex": "#1f77b4", "name": "蓝色", "badge": "A", "pattern": "diag"},
-    {"hex": "#ff7f0e", "name": "橙色", "badge": "B", "pattern": "cross"},
-    {"hex": "#2ca02c", "name": "绿色", "badge": "C", "pattern": "dots"},
-    {"hex": "#d62728", "name": "红色", "badge": "D", "pattern": "hatch"},
-    {"hex": "#9467bd", "name": "紫色", "badge": "E", "pattern": "diag"},
-    {"hex": "#17becf", "name": "青色", "badge": "F", "pattern": "cross"},
-    {"hex": "#8c564b", "name": "棕色", "badge": "G", "pattern": "dots"},
-    {"hex": "#e377c2", "name": "粉色", "badge": "H", "pattern": "hatch"},
-    {"hex": "#005f73", "name": "深青", "badge": "I", "pattern": "diag"},
-    {"hex": "#9a031e", "name": "深红", "badge": "J", "pattern": "cross"},
-    {"hex": "#264653", "name": "深蓝", "badge": "K", "pattern": "dots"},
-    {"hex": "#6d597a", "name": "灰紫", "badge": "L", "pattern": "hatch"},
+    {"hex": "#38bdf8", "name": "天蓝", "badge": "A", "pattern": "diag"},
+    {"hex": "#f472b6", "name": "粉红", "badge": "B", "pattern": "cross"},
+    {"hex": "#4ade80", "name": "亮绿", "badge": "C", "pattern": "dots"},
+    {"hex": "#fb923c", "name": "亮橙", "badge": "D", "pattern": "hatch"},
+    {"hex": "#a855f7", "name": "亮紫", "badge": "E", "pattern": "diag"},
+    {"hex": "#2dd4bf", "name": "青绿", "badge": "F", "pattern": "cross"},
+    {"hex": "#fbbf24", "name": "明黄", "badge": "G", "pattern": "dots"},
+    {"hex": "#818cf8", "name": "靛蓝", "badge": "H", "pattern": "hatch"},
+    {"hex": "#34d399", "name": "蓝绿", "badge": "I", "pattern": "diag"},
+    {"hex": "#f87171", "name": "浅红", "badge": "J", "pattern": "cross"},
+    {"hex": "#60a5fa", "name": "浅蓝", "badge": "K", "pattern": "dots"},
+    {"hex": "#c084fc", "name": "浅紫", "badge": "L", "pattern": "hatch"},
 ]
 
 COLOR_CHOICES = [f"{p['badge']} {p['name']} {p['hex']}" for p in GROUP_COLOR_PALETTE]
@@ -824,7 +824,7 @@ class GroupScoreApp:
         setattr(self.cards_canvas, "_allow_mousewheel", True)
         self.cards_scrollbar = ttk.Scrollbar(self.cards_scroller, orient=tk.VERTICAL, command=self.cards_canvas.yview)
         self.cards_canvas.configure(yscrollcommand=self.cards_scrollbar.set)
-        self.cards_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.cards_scrollbar.pack_forget()
         self.cards_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.cards_frame = tk.Frame(self.cards_canvas, bg=self.theme.bg_primary)
@@ -905,9 +905,7 @@ class GroupScoreApp:
 
     def _hover_text_for_group(self, group: dict[str, Any]) -> str:
         name = str(group.get("name", ""))
-        badge = str(group.get("badge", ""))
-        color = str(group.get("color", ""))
-        return f"小组：{name}\n标识：{badge}\n颜色：{color}"
+        return f"小组：{name}"
 
     def _bind_tooltip(self, widget: tk.Widget, text_getter: Callable[[], str]) -> None:
         widget.bind("<Enter>", lambda _e: self.tooltip.show(widget, text_getter()))
@@ -915,42 +913,34 @@ class GroupScoreApp:
 
     def _create_group_card(self, group_idx: int) -> None:
         group = self.data["groups"][group_idx]
-        border_color = str(group.get("color", self.theme.accent_blue))
-        badge = str(group.get("badge", str(group_idx + 1)))
-        pattern = str(group.get("pattern", "diag"))
-        title_fg = _best_text_color(border_color)
+        group_color = str(group.get("color", self.theme.accent_blue))
+        title_bg = self.theme.bg_surface
+        title_fg = self.theme.text_primary
 
         card = tk.Frame(
             self.cards_frame,
             bg=self.theme.bg_secondary,
-            highlightbackground=border_color,
-            highlightcolor=border_color,
-            highlightthickness=3,
-            relief=tk.RAISED,
+            highlightbackground=self.theme.border,
+            highlightcolor=self.theme.border,
+            highlightthickness=1,
             bd=0,
         )
 
-        title_frame = tk.Frame(card, bg=border_color)
+        title_frame = tk.Frame(card, bg=title_bg)
         title_frame.pack(fill=tk.X)
-        swatch = tk.Canvas(title_frame, width=34, height=22, highlightthickness=0, bd=0)
-        swatch.pack(side=tk.LEFT, padx=10, pady=8)
-        self._draw_swatch(swatch, color=border_color, pattern=pattern, badge=badge)
-        title_label = tk.Label(title_frame, text=f"{badge}  {str(group.get('name', ''))}", bg=border_color, fg=title_fg,
+        title_label = tk.Label(title_frame, text=str(group.get("name", "")), bg=title_bg, fg=title_fg,
                                font=self.font_header, pady=8)
-        title_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        self._bind_tooltip(title_frame, lambda g=group: self._hover_text_for_group(g))
-        self._bind_tooltip(swatch, lambda g=group: self._hover_text_for_group(g))
-        self._bind_tooltip(title_label, lambda g=group: self._hover_text_for_group(g))
+        title_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12)
 
         def on_enter(_e: tk.Event) -> None:
             try:
-                card.configure(highlightthickness=4)
+                card.configure(highlightbackground=self.theme.accent_blue, highlightthickness=2)
             except Exception:
                 pass
 
         def on_leave(_e: tk.Event) -> None:
             try:
-                card.configure(highlightthickness=3)
+                card.configure(highlightbackground=self.theme.border, highlightthickness=1)
             except Exception:
                 pass
 
@@ -962,7 +952,7 @@ class GroupScoreApp:
         content_frame.pack(fill=tk.BOTH, expand=True, padx=pad, pady=pad)
 
         score_var = tk.StringVar(value=f"{float(group.get('score', 0.0)):.1f}")
-        score_label = tk.Label(content_frame, textvariable=score_var, bg=self.theme.bg_secondary, fg=border_color,
+        score_label = tk.Label(content_frame, textvariable=score_var, bg=self.theme.bg_secondary, fg=self.theme.accent_blue,
                                font=self.font_score)
         score_label.pack(pady=(6, 0))
 
@@ -971,8 +961,8 @@ class GroupScoreApp:
         score_hint.pack(pady=(0, 8))
 
         btn_frame = tk.Frame(content_frame, bg=self.theme.bg_secondary)
-        btn_frame.pack(pady=8)
-        btn_style = {"font": self.font_body, "bd": 0, "padx": 10, "pady": 6}
+        btn_frame.pack(pady=(10, 2))
+        btn_style = {"font": self.font_title, "bd": 0, "padx": 18, "pady": 10}
         bg_p1 = self.theme.accent_green
         tk.Button(
             btn_frame,
@@ -981,7 +971,7 @@ class GroupScoreApp:
             fg=self._fg_on(bg_p1),
             command=lambda g=group_idx: self.change_score(g, 1.0),
             **btn_style,
-        ).grid(row=0, column=0, padx=4, pady=2)
+        ).grid(row=0, column=0, padx=10, pady=2, sticky="ew")
         bg_n1 = self.theme.accent_red
         tk.Button(
             btn_frame,
@@ -990,25 +980,9 @@ class GroupScoreApp:
             fg=self._fg_on(bg_n1),
             command=lambda g=group_idx: self.change_score(g, -1.0),
             **btn_style,
-        ).grid(row=0, column=1, padx=4, pady=2)
-        bg_p05 = self.theme.accent_blue
-        tk.Button(
-            btn_frame,
-            text="+0.5",
-            bg=bg_p05,
-            fg=self._fg_on(bg_p05),
-            command=lambda g=group_idx: self.change_score(g, 0.5),
-            **btn_style,
-        ).grid(row=0, column=2, padx=4, pady=2)
-        bg_n05 = self.theme.accent_purple
-        tk.Button(
-            btn_frame,
-            text="-0.5",
-            bg=bg_n05,
-            fg=self._fg_on(bg_n05),
-            command=lambda g=group_idx: self.change_score(g, -0.5),
-            **btn_style,
-        ).grid(row=0, column=3, padx=4, pady=2)
+        ).grid(row=0, column=1, padx=10, pady=2, sticky="ew")
+        btn_frame.grid_columnconfigure(0, weight=1, uniform="btn")
+        btn_frame.grid_columnconfigure(1, weight=1, uniform="btn")
 
         self.group_cards.append(
             {
@@ -1018,43 +992,34 @@ class GroupScoreApp:
                 "title_frame": title_frame,
                 "title_label": title_label,
                 "score_label": score_label,
-                "swatch": swatch,
-                "last_color": border_color,
+                "group_color": group_color,
                 "anim_after_id": None,
                 "animating": False,
             }
         )
 
     def _apply_group_color_to_card(self, card_info: dict[str, Any], *, color: str) -> None:
-        fg = _best_text_color(color)
         idx = int(card_info["group_idx"])
         if idx >= len(self.data.get("groups", [])):
             return
         group = self.data["groups"][idx]
-        badge = str(group.get("badge", ""))
-        pattern = str(group.get("pattern", "diag"))
         name = str(group.get("name", ""))
         try:
-            card_info["card"].configure(highlightbackground=color, highlightcolor=color)
+            card_info["card"].configure(highlightbackground=self.theme.border, highlightcolor=self.theme.border)
         except Exception:
             pass
         try:
-            card_info["title_frame"].configure(bg=color)
+            card_info["title_frame"].configure(bg=self.theme.bg_surface)
         except Exception:
             pass
         try:
-            card_info["title_label"].configure(bg=color, fg=fg, text=f"{badge}  {name}")
+            card_info["title_label"].configure(bg=self.theme.bg_surface, fg=self.theme.text_primary, text=name)
         except Exception:
             pass
         try:
-            card_info["score_label"].configure(fg=color)
+            card_info["score_label"].configure(fg=self.theme.accent_blue)
         except Exception:
             pass
-        try:
-            self._draw_swatch(card_info["swatch"], color=color, pattern=pattern, badge=badge)
-        except Exception:
-            pass
-        card_info["last_color"] = color
 
     def _animate_group_card_color(self, card_info: dict[str, Any], *, from_color: str, to_color: str) -> None:
         if str(from_color).lower() == str(to_color).lower():
