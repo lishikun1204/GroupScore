@@ -27,6 +27,7 @@ class AppConfig:
     data_file: str = "scores_data.json"
     theme: str = "light"
     font_scale: float = 1.0
+    cards_zoom: float = 1.0
     history_render_limit: int = 200
     save_debounce_ms: int = 250
     responsive_breakpoint_px: int = 980
@@ -322,6 +323,10 @@ class GroupScoreApp:
         self.theme = resolve_theme(self.config.theme)
         self._startup_t0 = time.perf_counter()
         self._first_render_logged = False
+        self._cards_zoom = max(0.6, min(1.6, float(getattr(self.config, "cards_zoom", 1.0))))
+        self._right_collapsed = False
+        self._auto_fit_enabled = True
+        self._auto_fit_inflight = False
 
         self._save_after_id: Optional[str] = None
         self._layout_after_id: Optional[str] = None
@@ -395,6 +400,126 @@ class GroupScoreApp:
         except Exception:
             pass
 
+    def set_cards_zoom(self, zoom: float) -> None:
+        z = max(0.6, min(1.6, float(zoom)))
+        if abs(z - float(getattr(self, "_cards_zoom", 1.0))) < 1e-6:
+            return
+        self._cards_zoom = z
+        try:
+            self.config.cards_zoom = z
+        except Exception:
+            pass
+        if getattr(self, "cards_zoom_var", None) is not None:
+            try:
+                self.cards_zoom_var.set(f"{int(round(z * 100))}%")
+            except Exception:
+                pass
+        self._configure_fonts()
+        if getattr(self, "cards_frame", None) is not None:
+            self._rebuild_cards()
+        self.refresh_all()
+
+    def set_auto_fit_enabled(self, enabled: bool) -> None:
+        self._auto_fit_enabled = bool(enabled)
+        if getattr(self, "view_auto_fit_var", None) is not None:
+            try:
+                self.view_auto_fit_var.set(bool(self._auto_fit_enabled))
+            except Exception:
+                pass
+        if getattr(self, "left_auto_btn", None) is not None:
+            try:
+                self.left_auto_btn.configure(text=("自动✓" if self._auto_fit_enabled else "自动"))
+            except Exception:
+                pass
+        for btn_name in ("left_zoom_out_btn", "left_zoom_in_btn"):
+            btn = getattr(self, btn_name, None)
+            if btn is not None:
+                try:
+                    btn.configure(state=(tk.DISABLED if self._auto_fit_enabled else tk.NORMAL))
+                except Exception:
+                    pass
+        if self._auto_fit_enabled:
+            self._auto_fit_cards(self.root.winfo_width())
+
+    def _auto_fit_cards(self, fallback_width: int) -> None:
+        if not bool(getattr(self, "_auto_fit_enabled", True)):
+            return
+        if bool(getattr(self, "_auto_fit_inflight", False)):
+            return
+        if getattr(self, "cards_canvas", None) is None:
+            return
+        groups = self.data.get("groups", [])
+        total = len(groups) if isinstance(groups, list) else 0
+        if total <= 0:
+            return
+
+        self._auto_fit_inflight = True
+        try:
+            try:
+                avail_w = int(self.cards_canvas.winfo_width())
+            except Exception:
+                avail_w = 0
+            try:
+                avail_h = int(self.cards_canvas.winfo_height())
+            except Exception:
+                avail_h = 0
+            if avail_w <= 0:
+                avail_w = int(fallback_width or 0)
+            if avail_w <= 0 or avail_h <= 0:
+                return
+
+            gap = int(getattr(self, "_card_gap", 10))
+            base_w = 320.0
+            base_h = 260.0
+
+            best_cols: Optional[int] = None
+            best_zoom = 0.6
+            best_blank = 10**9
+            for cols in range(1, min(total, 12) + 1):
+                rows = (total + cols - 1) // cols
+                cell_w = (float(avail_w) - float(gap) * float(cols + 1)) / float(cols)
+                cell_h = (float(avail_h) - float(gap) * float(rows + 1)) / float(rows)
+                if cell_w <= 0 or cell_h <= 0:
+                    continue
+                z = min(cell_w / base_w, cell_h / base_h)
+                z = max(0.6, min(1.6, float(z)))
+                blank = int(cols * rows - total)
+                if (z > best_zoom + 0.01) or (abs(z - best_zoom) <= 0.01 and blank < best_blank):
+                    best_zoom = z
+                    best_cols = cols
+                    best_blank = blank
+
+            if best_cols is None:
+                return
+
+            changed_cols = best_cols != int(getattr(self, "_cards_columns", 1) or 1)
+            changed_zoom = abs(best_zoom - float(getattr(self, "_cards_zoom", 1.0))) >= 0.03
+
+            if changed_cols:
+                self._cards_columns = int(best_cols)
+
+            if changed_zoom:
+                self._cards_zoom = float(best_zoom)
+                try:
+                    self.config.cards_zoom = float(best_zoom)
+                except Exception:
+                    pass
+                if getattr(self, "cards_zoom_var", None) is not None:
+                    try:
+                        self.cards_zoom_var.set(f"{int(round(float(best_zoom) * 100))}%")
+                    except Exception:
+                        pass
+                self._configure_fonts()
+                if getattr(self, "cards_frame", None) is not None:
+                    self._rebuild_cards()
+                self.refresh_all()
+                return
+
+            if changed_cols:
+                self._layout_cards()
+        finally:
+            self._auto_fit_inflight = False
+
     def _configure_scaling(self) -> None:
         try:
             ppi = float(self.root.winfo_fpixels("1i"))
@@ -410,6 +535,11 @@ class GroupScoreApp:
         self.font_title = tkfont.Font(family=family, size=int(round(11 * s)), weight="bold")
         self.font_header = tkfont.Font(family=family, size=int(round(12 * s)), weight="bold")
         self.font_score = tkfont.Font(family="Arial Black", size=int(round(34 * s)), weight="bold")
+        z = float(getattr(self, "_cards_zoom", 1.0))
+        self.font_card_header = tkfont.Font(family=family, size=int(round(12 * s * z)), weight="bold")
+        self.font_card_score = tkfont.Font(family="Arial Black", size=int(round(34 * s * z)), weight="bold")
+        self.font_card_hint = tkfont.Font(family=family, size=int(round(9 * s * z)))
+        self.font_card_btn = tkfont.Font(family=family, size=int(round(11 * s * z)), weight="bold")
 
     def _configure_styles(self) -> None:
         self.style = ttk.Style()
@@ -489,8 +619,42 @@ class GroupScoreApp:
         )
         self.cards_placeholder.pack(fill=tk.BOTH, expand=True)
 
+        self.right_header = tk.Frame(self.right_container, bg=self.theme.bg_surface)
+        self.right_header.pack(fill=tk.X)
+        self.right_header.grid_columnconfigure(0, weight=1)
+        self.right_title = tk.Label(
+            self.right_header,
+            text=("统计面板" if self.locale == "zh_CN" else "Panel"),
+            bg=self.theme.bg_surface,
+            fg=self.theme.text_primary,
+            font=self.font_title,
+            padx=10,
+            pady=10,
+        )
+        self.right_title.grid(row=0, column=0, sticky="w")
+        self.right_toggle_btn = tk.Button(
+            self.right_header,
+            text=("收起" if self.locale == "zh_CN" else "Collapse"),
+            command=self.toggle_right_panel,
+            bg=self.theme.bg_surface,
+            fg=self.theme.text_primary,
+            bd=0,
+            font=self.font_small,
+            padx=10,
+            pady=8,
+            activebackground=self.theme.bg_surface,
+            activeforeground=self.theme.text_primary,
+        )
+        self.right_toggle_btn.grid(row=0, column=1, sticky="e", padx=8)
+
+        self.right_header_divider = tk.Frame(self.right_container, bg=self.theme.border, height=1)
+        self.right_header_divider.pack(fill=tk.X)
+
+        self.right_content = tk.Frame(self.right_container, bg=self.theme.bg_primary)
+        self.right_content.pack(fill=tk.BOTH, expand=True)
+
         self.right_placeholder = tk.Label(
-            self.right_container,
+            self.right_content,
             text="…",
             bg=self.theme.bg_primary,
             fg=self.theme.text_secondary,
@@ -500,6 +664,27 @@ class GroupScoreApp:
 
         self.root.bind("<Configure>", self._on_root_configure)
         self._apply_responsive_layout(self.root.winfo_width())
+
+    def toggle_right_panel(self) -> None:
+        self._right_collapsed = not bool(self._right_collapsed)
+        if self._right_collapsed:
+            try:
+                self.right_content.pack_forget()
+            except Exception:
+                pass
+            try:
+                self.right_toggle_btn.configure(text=("展开" if self.locale == "zh_CN" else "Expand"))
+            except Exception:
+                pass
+            return
+        try:
+            self.right_content.pack(fill=tk.BOTH, expand=True)
+        except Exception:
+            pass
+        try:
+            self.right_toggle_btn.configure(text=("收起" if self.locale == "zh_CN" else "Collapse"))
+        except Exception:
+            pass
 
     def _on_root_configure(self, event: tk.Event) -> None:
         if self._layout_after_id is not None:
@@ -530,9 +715,12 @@ class GroupScoreApp:
             mode = "stack"
 
         self._breakpoint = bp
-        self._outer_pad = int(pad)
-        self._card_gap = 12 if bp in ("desktop_1920", "desktop_1440") else 10
-        self._card_inner_pad = 14 if bp in ("desktop_1920",) else (12 if bp in ("desktop_1440", "tablet_768") else 10)
+        z = float(getattr(self, "_cards_zoom", 1.0))
+        self._outer_pad = int(round(int(pad) * max(0.85, min(1.3, z))))
+        base_gap = 12 if bp in ("desktop_1920", "desktop_1440") else 10
+        base_inner = 14 if bp in ("desktop_1920",) else (12 if bp in ("desktop_1440", "tablet_768") else 10)
+        self._card_gap = max(8, int(round(base_gap * z)))
+        self._card_inner_pad = max(8, int(round(base_inner * z)))
 
         if mode != self._layout_mode:
             self._layout_mode = mode
@@ -555,10 +743,17 @@ class GroupScoreApp:
                 self.main_container.columnconfigure(1, weight=0, minsize=int(right_min))
 
         self._update_cards_columns(w)
+        self._set_right_collapsed(bp == "mobile_375")
 
     @property
     def layout_mode(self) -> str:
         return self._layout_mode
+
+    def _set_right_collapsed(self, collapsed: bool) -> None:
+        want = bool(collapsed)
+        if bool(getattr(self, "_right_collapsed", False)) == want:
+            return
+        self.toggle_right_panel()
 
     def load_data(self) -> None:
         if os.path.exists(self.data_file):
@@ -664,7 +859,7 @@ class GroupScoreApp:
         self.refresh_all()
 
     def init_ranking(self) -> None:
-        rank_frame = tk.LabelFrame(self.right_container, text=self.t("rank_title"), font=self.font_title,
+        rank_frame = tk.LabelFrame(self.right_content, text=self.t("rank_title"), font=self.font_title,
                                    bg=self.theme.bg_primary, fg=self.theme.text_primary)
         rank_frame.pack(fill=tk.BOTH, padx=0, pady=(0, 10), expand=False)
 
@@ -680,7 +875,7 @@ class GroupScoreApp:
         self.rank_listbox.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
     def init_history(self) -> None:
-        hist_frame = tk.LabelFrame(self.right_container, text=self.t("history_title"), font=self.font_title,
+        hist_frame = tk.LabelFrame(self.right_content, text=self.t("history_title"), font=self.font_title,
                                    bg=self.theme.bg_primary, fg=self.theme.text_primary)
         hist_frame.pack(fill=tk.BOTH, padx=0, pady=(0, 10), expand=True)
 
@@ -714,7 +909,7 @@ class GroupScoreApp:
         self.history_text.tag_config("text", foreground=self.theme.text_primary, font=self.font_body)
 
     def init_batch_ops(self) -> None:
-        batch_frame = tk.LabelFrame(self.right_container, text=self.t("batch_title"), font=self.font_title,
+        batch_frame = tk.LabelFrame(self.right_content, text=self.t("batch_title"), font=self.font_title,
                                     bg=self.theme.bg_primary, fg=self.theme.text_primary)
         batch_frame.pack(fill=tk.BOTH, padx=0, pady=0, expand=False)
 
@@ -817,6 +1012,54 @@ class GroupScoreApp:
             self.cards_placeholder.destroy()
             self.cards_placeholder = None
 
+        self.left_header = tk.Frame(self.left_container, bg=self.theme.bg_surface)
+        self.left_header.pack(fill=tk.X, pady=(0, 10))
+        self.left_header.grid_columnconfigure(1, weight=1)
+        self.left_header_title = tk.Label(
+            self.left_header,
+            text=("小组矩阵" if self.locale == "zh_CN" else "Groups"),
+            bg=self.theme.bg_surface,
+            fg=self.theme.text_primary,
+            font=self.font_header,
+            padx=12,
+            pady=10,
+        )
+        self.left_header_title.grid(row=0, column=0, sticky="w")
+
+        self.cards_zoom_var = tk.StringVar(value=f"{int(round(float(getattr(self, '_cards_zoom', 1.0)) * 100))}%")
+        self.left_header_tools = tk.Frame(self.left_header, bg=self.theme.bg_surface)
+        self.left_header_tools.grid(row=0, column=2, sticky="e", padx=8)
+        btn_style = {
+            "bg": self.theme.bg_surface,
+            "fg": self.theme.text_primary,
+            "activebackground": self.theme.bg_surface,
+            "activeforeground": self.theme.text_primary,
+            "bd": 0,
+            "font": self.font_small,
+            "padx": 10,
+            "pady": 8,
+        }
+        self.left_auto_btn = tk.Button(self.left_header_tools, text=("自动✓" if getattr(self, "_auto_fit_enabled", True) else "自动"), command=lambda: self.set_auto_fit_enabled(not bool(getattr(self, "_auto_fit_enabled", True))), **btn_style)
+        self.left_auto_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.left_zoom_out_btn = tk.Button(self.left_header_tools, text="－", command=lambda: self.set_cards_zoom(self._cards_zoom - 0.1), **btn_style)
+        self.left_zoom_out_btn.pack(side=tk.LEFT, padx=(0, 2))
+        self.left_zoom_label = tk.Label(self.left_header_tools, textvariable=self.cards_zoom_var, bg=self.theme.bg_surface, fg=self.theme.text_secondary, font=self.font_small, padx=6)
+        self.left_zoom_label.pack(side=tk.LEFT)
+        self.left_zoom_in_btn = tk.Button(self.left_header_tools, text="＋", command=lambda: self.set_cards_zoom(self._cards_zoom + 0.1), **btn_style)
+        self.left_zoom_in_btn.pack(side=tk.LEFT, padx=(2, 10))
+        self.left_members_btn = tk.Button(self.left_header_tools, text=("成员" if self.locale == "zh_CN" else "Members"), command=self.open_members_manager_global, **btn_style)
+        self.left_members_btn.pack(side=tk.LEFT)
+
+        if bool(getattr(self, "_auto_fit_enabled", True)):
+            try:
+                self.left_zoom_out_btn.configure(state=tk.DISABLED)
+                self.left_zoom_in_btn.configure(state=tk.DISABLED)
+            except Exception:
+                pass
+
+        self.left_header_divider = tk.Frame(self.left_container, bg=self.theme.border, height=1)
+        self.left_header_divider.pack(fill=tk.X, pady=(0, 10))
+
         self.cards_scroller = tk.Frame(self.left_container, bg=self.theme.bg_primary)
         self.cards_scroller.pack(fill=tk.BOTH, expand=True)
 
@@ -841,6 +1084,7 @@ class GroupScoreApp:
                 self.cards_canvas.itemconfigure(self._cards_frame_window, width=self.cards_canvas.winfo_width())
             except Exception:
                 pass
+            self._update_cards_columns(self.root.winfo_width())
 
         self.cards_frame.bind("<Configure>", on_frame_configure)
         self.cards_canvas.bind("<Configure>", on_canvas_configure)
@@ -854,6 +1098,12 @@ class GroupScoreApp:
                 pass
 
         self.cards_canvas.bind("<MouseWheel>", on_mousewheel)
+        def on_ctrl_wheel(e: tk.Event) -> None:
+            if bool(getattr(self, "_auto_fit_enabled", True)):
+                self.set_auto_fit_enabled(False)
+            self.set_cards_zoom(self._cards_zoom + (0.1 if int(getattr(e, "delta", 0)) > 0 else -0.1))
+
+        self.cards_canvas.bind("<Control-MouseWheel>", on_ctrl_wheel)
         self.cards_canvas.bind("<Button-4>", lambda _e: self.cards_canvas.yview_scroll(-3, "units"))
         self.cards_canvas.bind("<Button-5>", lambda _e: self.cards_canvas.yview_scroll(3, "units"))
 
@@ -929,7 +1179,7 @@ class GroupScoreApp:
         title_frame = tk.Frame(card, bg=title_bg)
         title_frame.pack(fill=tk.X)
         title_label = tk.Label(title_frame, text=str(group.get("name", "")), bg=title_bg, fg=title_fg,
-                               font=self.font_header, pady=8)
+                               font=self.font_card_header, pady=8)
         title_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12)
 
         def on_enter(_e: tk.Event) -> None:
@@ -953,16 +1203,16 @@ class GroupScoreApp:
 
         score_var = tk.StringVar(value=f"{float(group.get('score', 0.0)):.1f}")
         score_label = tk.Label(content_frame, textvariable=score_var, bg=self.theme.bg_secondary, fg=group_color,
-                               font=self.font_score)
+                               font=self.font_card_score)
         score_label.pack(pady=(6, 0))
 
         score_hint = tk.Label(content_frame, text="当前积分" if self.locale == "zh_CN" else "Score",
-                              bg=self.theme.bg_secondary, fg=self.theme.text_secondary, font=self.font_small)
+                              bg=self.theme.bg_secondary, fg=self.theme.text_secondary, font=self.font_card_hint)
         score_hint.pack(pady=(0, 8))
 
         btn_frame = tk.Frame(content_frame, bg=self.theme.bg_secondary)
         btn_frame.pack(pady=(10, 2))
-        btn_style = {"font": self.font_title, "bd": 0, "padx": 18, "pady": 10}
+        btn_style = {"font": self.font_card_btn, "bd": 0, "padx": int(round(18 * float(getattr(self, "_cards_zoom", 1.0)))), "pady": int(round(10 * float(getattr(self, "_cards_zoom", 1.0))))}
         bg_p1 = self.theme.accent_green
         tk.Button(
             btn_frame,
@@ -1055,17 +1305,7 @@ class GroupScoreApp:
         tick(0)
 
     def _update_cards_columns(self, width: int) -> None:
-        w = int(width or 0)
-        if w >= 1920:
-            columns = 3
-        elif w >= 768:
-            columns = 2
-        else:
-            columns = 1
-        if columns == self._cards_columns:
-            return
-        self._cards_columns = columns
-        self._layout_cards()
+        self._auto_fit_cards(int(width or 0))
 
     def _layout_cards(self) -> None:
         if not hasattr(self, "group_cards"):
@@ -1144,6 +1384,16 @@ class GroupScoreApp:
         view_menu.add_command(label="1440×900", command=lambda: self.set_window_size(1440, 900))
         view_menu.add_command(label="768×1024", command=lambda: self.set_window_size(768, 1024))
         view_menu.add_command(label="375×667", command=lambda: self.set_window_size(375, 667))
+        view_menu.add_separator()
+        self.view_auto_fit_var = tk.BooleanVar(value=bool(getattr(self, "_auto_fit_enabled", True)))
+        view_menu.add_checkbutton(
+            label=("自动铺满" if self.locale == "zh_CN" else "Auto Fit"),
+            variable=self.view_auto_fit_var,
+            command=lambda: self.set_auto_fit_enabled(bool(self.view_auto_fit_var.get())),
+        )
+        view_menu.add_command(label=("小组缩小" if self.locale == "zh_CN" else "Zoom Out"), command=lambda: self.set_cards_zoom(self._cards_zoom - 0.1))
+        view_menu.add_command(label=("小组还原" if self.locale == "zh_CN" else "Zoom Reset"), command=lambda: self.set_cards_zoom(1.0))
+        view_menu.add_command(label=("小组放大" if self.locale == "zh_CN" else "Zoom In"), command=lambda: self.set_cards_zoom(self._cards_zoom + 0.1))
 
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label=self.t("menu_help"), menu=help_menu)
@@ -1357,12 +1607,12 @@ class GroupScoreApp:
 
         columns = ("name", "role", "group")
         tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=14)
-        tree.heading("name", text="姓名" if self.locale == "zh_CN" else "Name")
-        tree.heading("role", text="角色" if self.locale == "zh_CN" else "Role")
-        tree.heading("group", text="所属组" if self.locale == "zh_CN" else "Group")
-        tree.column("name", width=240)
+        tree.heading("name", text="姓名" if self.locale == "zh_CN" else "Name", anchor=tk.CENTER)
+        tree.heading("role", text="角色" if self.locale == "zh_CN" else "Role", anchor=tk.CENTER)
+        tree.heading("group", text="所属组" if self.locale == "zh_CN" else "Group", anchor=tk.CENTER)
+        tree.column("name", width=240, anchor=tk.CENTER)
         tree.column("role", width=120, anchor=tk.CENTER)
-        tree.column("group", width=260)
+        tree.column("group", width=260, anchor=tk.CENTER)
 
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
@@ -1397,170 +1647,6 @@ class GroupScoreApp:
                         iid=f"{gi}:{mi}",
                         values=(str(m.get("name", "")).strip(), str(m.get("role", "组员")).strip(), gname),
                     )
-
-        def ensure_excel_ready() -> Any:
-            try:
-                import openpyxl  # type: ignore
-
-                return openpyxl
-            except Exception:
-                messagebox.showerror(
-                    self.t("err"),
-                    "缺少 openpyxl，无法导入/导出 Excel。\n"
-                    "开发环境请安装：pip install openpyxl\n"
-                    "如已打包为 exe，请在打包环境安装 openpyxl 后重新打包。"
-                    if self.locale == "zh_CN"
-                    else "Missing openpyxl. Install: pip install openpyxl. Rebuild exe after installing.",
-                    parent=win,
-                )
-                return None
-
-        def export_excel() -> None:
-            openpyxl = ensure_excel_ready()
-            if openpyxl is None:
-                return
-            path = filedialog.asksaveasfilename(
-                parent=win,
-                title="导出 Excel" if self.locale == "zh_CN" else "Export Excel",
-                defaultextension=".xlsx",
-                filetypes=[("Excel", "*.xlsx")],
-            )
-            if not path:
-                return
-
-            wb = openpyxl.Workbook()
-            ws_groups = wb.active
-            ws_groups.title = "Groups"
-            ws_groups.append(["name", "score", "color", "badge", "pattern"])
-            for g in self.data.get("groups", []):
-                ws_groups.append(
-                    [
-                        str(g.get("name", "")).strip(),
-                        float(g.get("score", 0.0)),
-                        str(_extract_hex(g.get("color", "")) or "").lower(),
-                        str(g.get("badge", "")).strip(),
-                        str(g.get("pattern", "")).strip(),
-                    ]
-                )
-
-            ws_members = wb.create_sheet("Members")
-            ws_members.append(["group", "name", "role"])
-            for g in self.data.get("groups", []):
-                gname = str(g.get("name", "")).strip()
-                members = g.get("members", [])
-                if not isinstance(members, list):
-                    continue
-                for m in members:
-                    ws_members.append([gname, str(m.get("name", "")).strip(), str(m.get("role", "组员")).strip()])
-
-            try:
-                wb.save(path)
-            except Exception as e:
-                messagebox.showerror(self.t("err"), str(e))
-                return
-            messagebox.showinfo(self.t("info"), "导出完成。" if self.locale == "zh_CN" else "Exported.")
-
-        def import_excel() -> None:
-            openpyxl = ensure_excel_ready()
-            if openpyxl is None:
-                return
-            path = filedialog.askopenfilename(
-                parent=win,
-                title="导入 Excel" if self.locale == "zh_CN" else "Import Excel",
-                filetypes=[("Excel", "*.xlsx")],
-            )
-            if not path:
-                return
-            clear_first = messagebox.askyesno(
-                self.t("info"),
-                "导入前是否清空现有小组与成员？" if self.locale == "zh_CN" else "Clear existing groups/members before import?",
-                parent=win,
-            )
-            try:
-                wb = openpyxl.load_workbook(path, data_only=True)
-            except Exception as e:
-                messagebox.showerror(self.t("err"), str(e))
-                return
-
-            sheet_map = {str(name).strip().lower(): name for name in wb.sheetnames}
-            groups_sheet_name = sheet_map.get("groups")
-            members_sheet_name = sheet_map.get("members")
-            if not groups_sheet_name and not members_sheet_name:
-                messagebox.showerror(
-                    self.t("err"),
-                    "未找到工作表：Groups / Members" if self.locale == "zh_CN" else "Missing sheets: Groups / Members",
-                )
-                return
-
-            if clear_first:
-                self.data["groups"] = []
-
-            def get_or_create_group(name: str) -> dict[str, Any]:
-                for g in self.data.get("groups", []):
-                    if str(g.get("name", "")).strip() == name:
-                        if "members" not in g or not isinstance(g.get("members"), list):
-                            g["members"] = []
-                        return g
-                used_hex = {c.lower() for gg in self.data.get("groups", []) for c in [(_extract_hex(gg.get("color", "")) or "")] if c}
-                preferred = _next_palette_entry(used_hex)
-                group = {
-                    "name": name,
-                    "score": 0.0,
-                    "color": str(preferred["hex"]).lower(),
-                    "badge": str(preferred["badge"]),
-                    "pattern": str(preferred["pattern"]),
-                    "members": [],
-                }
-                self.data["groups"].append(group)
-                return group
-
-            if groups_sheet_name:
-                ws = wb[groups_sheet_name]
-                for row in ws.iter_rows(min_row=2, values_only=True):
-                    if not row:
-                        continue
-                    name = str(row[0]).strip() if row[0] is not None else ""
-                    if not name:
-                        continue
-                    g = get_or_create_group(name)
-                    if len(row) > 1 and row[1] is not None and str(row[1]).strip() != "":
-                        try:
-                            g["score"] = float(row[1])
-                        except Exception:
-                            pass
-                    if len(row) > 2 and row[2] is not None and str(row[2]).strip():
-                        g["color"] = str(row[2]).strip().lower()
-                    if len(row) > 3 and row[3] is not None and str(row[3]).strip():
-                        g["badge"] = str(row[3]).strip()
-                    if len(row) > 4 and row[4] is not None and str(row[4]).strip():
-                        g["pattern"] = str(row[4]).strip()
-
-            if members_sheet_name:
-                ws = wb[members_sheet_name]
-                for row in ws.iter_rows(min_row=2, values_only=True):
-                    if not row:
-                        continue
-                    gname = str(row[0]).strip() if row[0] is not None else ""
-                    mname = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
-                    role = str(row[2]).strip() if len(row) > 2 and row[2] is not None else "组员"
-                    if not gname or not mname:
-                        continue
-                    g = get_or_create_group(gname)
-                    members = g.setdefault("members", [])
-                    existing = next((m for m in members if str(m.get("name", "")).strip() == mname), None)
-                    if existing is None:
-                        members.append({"name": mname, "role": role or "组员"})
-                    else:
-                        existing["role"] = role or str(existing.get("role", "组员"))
-
-            self._scores_dirty = True
-            self._ranking_dirty = True
-            self._history_dirty = True
-            self._mark_dirty()
-            self._rebuild_cards()
-            self.refresh_all()
-            reload_tree()
-            messagebox.showinfo(self.t("info"), "导入完成。" if self.locale == "zh_CN" else "Imported.")
 
         reload_tree()
 
@@ -1783,10 +1869,6 @@ class GroupScoreApp:
         tk.Button(btn_frame, text="✏️ 编辑" if self.locale == "zh_CN" else "Edit", command=on_edit, bg=bg_edit, fg=self._fg_on(bg_edit), **btn_style).pack(side=tk.LEFT, padx=5)
         bg_del = self.theme.accent_red
         tk.Button(btn_frame, text="🗑️ 删除" if self.locale == "zh_CN" else "Delete", command=on_delete, bg=bg_del, fg=self._fg_on(bg_del), **btn_style).pack(side=tk.LEFT, padx=5)
-        bg_export = self.theme.accent_purple
-        tk.Button(btn_frame, text="⬆️ 导出Excel" if self.locale == "zh_CN" else "Export Excel", command=export_excel, bg=bg_export, fg=self._fg_on(bg_export), **btn_style).pack(side=tk.LEFT, padx=5)
-        bg_import = self.theme.accent_neutral
-        tk.Button(btn_frame, text="⬇️ 导入Excel" if self.locale == "zh_CN" else "Import Excel", command=import_excel, bg=bg_import, fg=self._fg_on(bg_import), **btn_style).pack(side=tk.LEFT, padx=5)
         bg_close = self.theme.accent_neutral
         tk.Button(btn_frame, text="关闭" if self.locale == "zh_CN" else "Close", command=win.destroy, bg=bg_close, fg=self._fg_on(bg_close), **btn_style).pack(side=tk.RIGHT, padx=5)
 
@@ -2517,6 +2599,21 @@ class GroupScoreApp:
         self.main_container.configure(bg=self.theme.bg_primary)
         self.left_container.configure(bg=self.theme.bg_primary)
         self.right_container.configure(bg=self.theme.bg_primary)
+        if getattr(self, "right_header", None) is not None:
+            self.right_header.configure(bg=self.theme.bg_surface)
+        if getattr(self, "right_title", None) is not None:
+            self.right_title.configure(bg=self.theme.bg_surface, fg=self.theme.text_primary)
+        if getattr(self, "right_toggle_btn", None) is not None:
+            self.right_toggle_btn.configure(
+                bg=self.theme.bg_surface,
+                fg=self.theme.text_primary,
+                activebackground=self.theme.bg_surface,
+                activeforeground=self.theme.text_primary,
+            )
+        if getattr(self, "right_header_divider", None) is not None:
+            self.right_header_divider.configure(bg=self.theme.border)
+        if getattr(self, "right_content", None) is not None:
+            self.right_content.configure(bg=self.theme.bg_primary)
         self._configure_styles()
         if self.rank_listbox:
             self.rank_listbox.configure(bg=self.theme.bg_secondary, fg=self.theme.text_primary,
@@ -2531,6 +2628,28 @@ class GroupScoreApp:
         if getattr(self, "cards_scroller", None) is not None:
             self.cards_scroller.configure(bg=self.theme.bg_primary)
             self._rebuild_cards()
+        if getattr(self, "left_header", None) is not None:
+            self.left_header.configure(bg=self.theme.bg_surface)
+        if getattr(self, "left_header_tools", None) is not None:
+            self.left_header_tools.configure(bg=self.theme.bg_surface)
+        if getattr(self, "left_header_title", None) is not None:
+            self.left_header_title.configure(bg=self.theme.bg_surface, fg=self.theme.text_primary)
+        if getattr(self, "left_zoom_label", None) is not None:
+            self.left_zoom_label.configure(bg=self.theme.bg_surface, fg=self.theme.text_secondary)
+        if getattr(self, "left_header_divider", None) is not None:
+            self.left_header_divider.configure(bg=self.theme.border)
+        for w in ("left_auto_btn", "left_zoom_out_btn", "left_zoom_in_btn", "left_members_btn"):
+            btn = getattr(self, w, None)
+            if btn is not None:
+                try:
+                    btn.configure(
+                        bg=self.theme.bg_surface,
+                        fg=self.theme.text_primary,
+                        activebackground=self.theme.bg_surface,
+                        activeforeground=self.theme.text_primary,
+                    )
+                except Exception:
+                    pass
         self._history_dirty = True
         self._ranking_dirty = True
         self._scores_dirty = True
